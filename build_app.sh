@@ -43,10 +43,18 @@ hdiutil create -volname "HH Agent $VERSION" -srcfolder "$STAGE" \
   -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
+# Промежуточные файлы PyInstaller удаляем: внутри build/ лежит HHAgent.pkg —
+# это внутренний формат архива PyInstaller, а НЕ установщик. macOS пытается
+# открыть его «Установщиком» и выдаёт ошибку -1, что сбивает с толку.
+echo "==> Уборка промежуточных файлов"
+rm -rf build
+
 echo
 echo "✅ Готово"
 echo "   Приложение: $APP"
 echo "   Установщик: $DMG ($(du -sh "$DMG" | cut -f1))"
+echo
+echo "   Устанавливать нужно ИМЕННО из $DMG"
 echo
 echo "Важно для тех, кто скачает DMG с GitHub: сборка подписана ad-hoc, а не"
 echo "нотаризована Apple. При первом открытии macOS скажет, что приложение"

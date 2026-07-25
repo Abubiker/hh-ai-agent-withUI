@@ -4,7 +4,7 @@ python-dotenv
 requests
 aiohttp
 playwright-stealth
-keyring
+keyring          # опционально: только если включить хранение в Связке ключей
 desktop-notifier
 pywebview
 

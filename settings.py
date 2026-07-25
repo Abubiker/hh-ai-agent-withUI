@@ -76,10 +76,26 @@ DEFAULTS = {
         # Длительность сеанса в минутах; 0 — бессрочно.
         "session_minutes": 0,
     },
+    "security": {
+        # False — токены в файле 0600 (без запросов пароля от системы).
+        # True  — в Связке ключей: надёжнее, но macOS будет спрашивать пароль
+        #         после каждого обновления приложения.
+        "use_keychain": False,
+    },
 }
 
-# Ключи секретов в Keychain
 SECRET_KEYS = ("tg_bot_token", "anthropic_api_key", "openai_api_key")
+
+# Где хранить токены. По умолчанию — файл с правами 0600 рядом с настройками.
+#
+# Почему не Связка ключей по умолчанию: доступ к записи в Связке привязан к
+# подписи программы, а ad-hoc подпись меняется при каждой пересборке. Из-за
+# этого macOS после каждого обновления требует пароль от Связки — пугающее
+# окно, которое многих отталкивает. Файл 0600 читается только владельцем;
+# для токена бота и API-ключей это разумный размен.
+#
+# Кому нужна Связка — в настройках можно переключить обратно.
+SECRETS_FILE = "secrets.json"
 
 
 def data_dir() -> Path:
@@ -192,32 +208,98 @@ class Settings:
 
     # ---------- секреты ----------
 
+    @property
+    def use_keychain(self) -> bool:
+        return bool(self.data.get("security", {}).get("use_keychain", False))
+
+    def _secrets_path(self) -> Path:
+        return self.path.parent / SECRETS_FILE
+
+    def _read_secrets_file(self) -> dict:
+        p = self._secrets_path()
+        if not p.exists():
+            return {}
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_secrets_file(self, data: dict):
+        p = self._secrets_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o600)  # читает только владелец
+        tmp.replace(p)
+        os.chmod(p, 0o600)
+
     def get_secret(self, name: str) -> str:
         if name in self._secret_cache:
             return self._secret_cache[name]
-        value = ""
-        try:
-            import keyring
-            value = keyring.get_password(APP_NAME, name) or ""
-        except Exception:
-            # keyring может быть недоступен (нет бэкенда) — не падаем,
-            # секреты просто окажутся пустыми, о чём скажет UI.
-            pass
+
+        value = self._read_secrets_file().get(name, "")
+
+        # Связку опрашиваем, только если пользователь сам её выбрал: иначе
+        # macOS покажет запрос пароля, а это пугает больше, чем помогает.
+        if not value and self.use_keychain:
+            try:
+                import keyring
+                value = keyring.get_password(APP_NAME, name) or ""
+            except Exception:
+                pass
+
         if not value:
             value = os.getenv(name.upper(), "")
+
         self._secret_cache[name] = value
         return value
 
     def set_secret(self, name: str, value: str):
         self._secret_cache[name] = value
+
+        if self.use_keychain:
+            try:
+                import keyring
+                if value:
+                    keyring.set_password(APP_NAME, name, value)
+                else:
+                    keyring.delete_password(APP_NAME, name)
+                return
+            except Exception as e:
+                print(f"⚠️ Связка ключей недоступна ({e}); сохраняю в файл.")
+
+        data = self._read_secrets_file()
+        if value:
+            data[name] = value
+        else:
+            data.pop(name, None)
+        self._write_secrets_file(data)
+
+    def migrate_secrets_from_keychain(self) -> int:
+        """Разовый перенос токенов из Связки в файл — чтобы после перехода
+        не пришлось вводить их заново."""
+        moved = 0
         try:
             import keyring
-            if value:
-                keyring.set_password(APP_NAME, name, value)
-            else:
-                keyring.delete_password(APP_NAME, name)
-        except Exception as e:
-            print(f"⚠️ Не удалось сохранить «{name}» в Keychain: {e}")
+        except Exception:
+            return 0
+        data = self._read_secrets_file()
+        for name in SECRET_KEYS:
+            if data.get(name):
+                continue
+            try:
+                v = keyring.get_password(APP_NAME, name)
+            except Exception:
+                continue
+            if v:
+                data[name] = v
+                moved += 1
+        if moved:
+            self._write_secrets_file(data)
+            self._secret_cache.clear()
+        return moved
 
     # ---------- быстрый доступ к часто используемым значениям ----------
 

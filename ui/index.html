@@ -276,6 +276,13 @@
       <label class="inline"><input type="checkbox" class="ev" data-ev="error"><span>Ошибки в работе</span></label>
     </div>
     <div class="card">
+      <h2>Хранение токенов</h2>
+      <label class="inline"><input type="checkbox" id="useKeychain"><span>Хранить в Связке ключей macOS</span></label>
+      <p class="hint">По умолчанию токены лежат в файле, доступном только вам (права 0600) — система
+        ничего не спрашивает. Связка надёжнее, но после каждого обновления приложения macOS будет
+        просить пароль от Связки, потому что подпись программы меняется.</p>
+    </div>
+    <div class="card">
       <h2>Файл настроек</h2>
       <p class="hint" id="settingsPath"></p>
       <button id="btnOpenFolder">Показать в Finder</button>
@@ -391,6 +398,7 @@ async function loadSettings() {
   $("tgUserId").value = s.notifications.tg_user_id || "";
   const ev = s.notifications.events || {};
   document.querySelectorAll(".ev").forEach(c => c.checked = ev[c.dataset.ev] !== false);
+  $("useKeychain").checked = !!(s.security && s.security.use_keychain);
   if (s._secrets.tg_bot_token) $("tgToken").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.anthropic_api_key) $("anthropicKey").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.openai_api_key) $("openaiKey").placeholder = "сохранён — оставьте пустым";
@@ -415,6 +423,7 @@ function collect() {
       experience: [...document.querySelectorAll(".exp:checked")].map(c => c.value),
     },
     schedule: { cycle_pause_minutes: +$("pause").value || 10 },
+    security: { use_keychain: $("useKeychain").checked },
     llm: {
       provider: $("provider").value,
       ollama_url: $("ollamaUrl").value.trim(),

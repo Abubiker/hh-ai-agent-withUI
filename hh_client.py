@@ -1,13 +1,123 @@
 import os
+import re
 import asyncio
 import random
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 import database
+import control
+from stats import Stats
 from ai_analyzer import is_vacancy_suitable, generate_cover_letter
-from config import SEARCH_QUERIES
+from config import SEARCH_QUERIES, MAX_PAGES_PER_QUERY, SEARCH_IN_TITLE_ONLY
+from urllib.parse import quote_plus
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
+
+
+class SkipVacancy(Exception):
+    """Вакансию нужно пропустить штатно (архив, редирект, капча), это не ошибка."""
+
+# Жёсткий фильтр по названию вакансии: очевидно чужие грейды и профессии,
+# чтобы не гонять на них модель. Проверка идёт по ЦЕЛЫМ словам (с учётом
+# русских окончаний), а не по подстроке: раньше "intern" отсекал
+# "International", "лид" — "валидацию" и "консолидацию", а "hr" — "Chrome".
+# Английские слова ищем ЦЕЛИКОМ: иначе "intern" отсекает "International",
+# а "hr" — "Chrome".
+# Senior/Сеньор намеренно НЕ в списке: на старшие позиции откликаемся тоже.
+# Отсекаем только управленческие роли (Lead, Head, руководитель) и чужие профессии.
+STOP_WORDS_EN = [
+    "lead", "head", "architect", "intern", "trainee",
+    "manager", "designer", "hr", "analyst", "1c",
+]
+
+# Русские — с любым падежным окончанием ("аналитику", "менеджеров"),
+# но обязательно с начала слова, иначе "лид" ловит "валидацию".
+STOP_WORDS_RU = [
+    "лид", "архитектор", "руководител", "главн", "стажер",
+    "стажёр", "стажировк", "менеджер", "дизайнер", "аналитик",
+    "преподавател", "педагог", "маркетолог", "продаж", "1с",
+    "слесар", "диспетчер", "ассистент", "риелтор", "учител",
+]
+
+_STOP_RE = re.compile(
+    r"(?<!\w)(?:"
+    + "|".join(re.escape(w) for w in STOP_WORDS_RU) + r")\w*"
+    r"|\b(?:" + "|".join(re.escape(w) for w in STOP_WORDS_EN) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def find_stop_word(title: str):
+    """Возвращает найденное стоп-слово или None, если название чистое."""
+    m = _STOP_RE.search(title.lower())
+    return m.group(0) if m else None
+
+
+async def handle_vpn_check(page) -> bool:
+    """HH подменяет страницу проверкой «VPN мешает работе сайта» (/vpncheeck).
+    Именно это раньше принималось за капчу. Жмём «Я не использую VPN».
+
+    Возвращает True, если проверка была и её удалось пройти.
+    """
+    if "vpncheeck" not in page.url:
+        return False
+
+    print("🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...")
+    for attempt in (1, 2):
+        try:
+            btn = page.locator('text="Я не использую VPN"').first
+            await btn.click(timeout=5000)
+            await asyncio.sleep(random.uniform(2.5, 4.0))
+            if "vpncheeck" not in page.url:
+                print("   ✅ Проверка пройдена, продолжаю.")
+                return True
+        except Exception:
+            pass
+        if attempt == 1:
+            await asyncio.sleep(3)
+
+    print("   ⚠️ Пройти проверку не удалось. Скорее всего включён VPN — "
+          "отключите его, HH блокирует такие подключения.")
+    return False
+
+
+async def diagnose_page(page):
+    """Разбирается, почему на странице нет описания вакансии.
+
+    Исходный код считал капчей ЛЮБОЕ отсутствие описания, хотя чаще это
+    архивная вакансия или редирект. Возвращает (код, человекочитаемая причина).
+    Код: captcha | archived | not_found | redirect | unknown
+    """
+    try:
+        url = page.url
+        try:
+            body = (await page.locator("body").inner_text(timeout=3000))[:2000].lower()
+        except Exception:
+            body = ""
+        title = (await page.title()).lower()
+        probe = title + " " + body
+
+        if "vpncheeck" in url or "vpn мешает работе" in (title + body):
+            return "vpn_check", "HH требует отключить VPN (страница /vpncheeck)"
+
+        markers = [
+            ("captcha", ["подтвердите, что вы не робот", "вы не робот", "captcha",
+                         "капча", "just a moment", "проверка браузера",
+                         "необычн", "подозрительн"]),
+            ("archived", ["вакансия в архиве", "в архиве", "вакансия закрыта",
+                          "уже не размещ"]),
+            ("not_found", ["такой вакансии больше нет", "страница не найдена",
+                           "404", "вакансия не найдена"]),
+        ]
+        for code, words in markers:
+            if any(w in probe for w in words):
+                return code, f"{code} (по тексту страницы)"
+
+        if "hh.ru/vacancy/" not in url:
+            return "redirect", f"редирект на {url[:80]}"
+        return "unknown", f"описание не найдено, заголовок: {title[:60]!r}"
+    except Exception as e:
+        return "unknown", f"не удалось разобрать страницу: {e}"
 
 class HHClient:
     def __init__(self):
@@ -15,6 +125,7 @@ class HHClient:
         self.browser = None
         self.context = None
         self.page = None
+        self.stats = Stats()
 
     async def start(self):
         self.playwright = await async_playwright().start()
@@ -78,21 +189,34 @@ class HHClient:
     async def search_and_apply(self, send_notification_func):
         print("Начинаем поиск вакансий...")
         for query in SEARCH_QUERIES:
+            if control.should_stop():
+                print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                return
             print(f"\n======================================")
             print(f"🔍 Поиск по запросу: {query}")
             print(f"======================================")
             
-            # Два режима поиска: сначала Питер (все графики), потом РФ (только удаленка)
+            # Два режима поиска: сначала Москва (все графики), потом РФ (только удаленка)
             search_configs = [
-                {"name": "Санкт-Петербург (любой график)", "params": "&area=2"},
+                {"name": "Москва (любой график)", "params": "&area=1"},
                 {"name": "Вся Россия (только удаленка)", "params": "&area=113&schedule=remote"}
             ]
-            
+
             for config in search_configs:
                 print(f"📍 Режим: {config['name']}")
-                url = f"https://hh.ru/search/vacancy?text={query}&order_by=publication_time&experience=noExperience&experience=between1And3{config['params']}"
+                # quote_plus: в запросах есть пробелы и кириллица — кодируем явно,
+                # чтобы URL не зависел от того, как их нормализует браузер.
+                # moreThan6 — чтобы в выдачу попадали и старшие позиции (Senior/Ведущий),
+                # на них теперь тоже откликаемся. Слишком высокие требования отсеет ИИ.
+                # search_field=name — искать слова запроса только в названии вакансии.
+                field = "&search_field=name" if SEARCH_IN_TITLE_ONLY else ""
+                url = (f"https://hh.ru/search/vacancy?text={quote_plus(query)}"
+                       f"{field}&order_by=publication_time"
+                       f"&experience=between1And3&experience=between3And6"
+                       f"&experience=moreThan6{config['params']}")
                 await self.page.goto(url)
                 await asyncio.sleep(3)
+                await handle_vpn_check(self.page)
                 page_num = 1
                 while True:
                     print(f"📄 Парсим страницу {page_num} по запросу '{query}' ({config['name']})...")
@@ -115,28 +239,74 @@ class HHClient:
                         if not job_id or database.is_job_applied(job_id):
                             # print(f"Пропускаем (уже обработано): {title}") # Раскомментировать, если нужно видеть все пропуски
                             continue
-                    
+
+                        if control.should_stop():
+                            print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                            return
+
+                        # Жёсткий фильтр по названию — ДО открытия страницы: названия
+                        # хватает, а загрузка вакансии стоит ~4 секунды на каждую.
+                        hit = find_stop_word(title)
+                        if hit:
+                            self.stats.hard_skipped += 1
+                            print(f"⏩ Пропускаем (Неподходящий грейд/профессия — '{hit}'): {title}")
+                            # В базу НЕ пишем: проверка названия бесплатная, зато правки
+                            # списка стоп-слов подействуют и на уже виденные вакансии.
+                            continue
+
+                        self.stats.viewed += 1
                         print(f"👁️ Открываем вакансию: {title}")
                         page = await self.context.new_page()
                         await Stealth().apply_stealth_async(page)
                         try:
                             await page.goto(href)
                             await asyncio.sleep(2)
-                        
+                            # Проверка VPN может подменить и страницу вакансии
+                            if await handle_vpn_check(page):
+                                await page.goto(href)
+                                await asyncio.sleep(2)
+
                             desc_loc = page.locator('div[data-qa="vacancy-description"]')
-                            # Если описания нет - возможно капча. Запускаем цикл решения.
+                            # Если описания нет — разбираемся, ЧТО именно на странице.
+                            # Раньше любое отсутствие описания считалось капчей.
                             while not await desc_loc.is_visible():
-                                print(f"⚠️ Описание не найдено. Возможно, вылезла капча: {title}")
+                                reason_code, reason_text = await diagnose_page(page)
+
+                                # Архив, удалённая вакансия или чужая вёрстка — не капча,
+                                # решать нечего. Помечаем обработанной и идём дальше.
+                                if reason_code != "captcha":
+                                    print(f"⏭️ Пропускаю ({reason_text}): {title}")
+                                    database.add_applied_job(job_id, title, href)
+                                    raise SkipVacancy(reason_code)
+
+                                print(f"🚨 Похоже на капчу/антибот: {title}")
                                 import tg_bot
-                                
+
+                                # Без Telegram переслать капчу некому — не зависаем.
+                                # Сохраняем скриншот, чтобы можно было посмотреть глазами.
+                                if not control.telegram_enabled:
+                                    try:
+                                        await page.screenshot(path="captcha.png")
+                                        print("   Скриншот сохранён в captcha.png")
+                                    except Exception:
+                                        pass
+                                    print("⏭️ Режим без Telegram: пропускаю вакансию с капчей.")
+                                    raise SkipVacancy("captcha")
+
                                 try:
                                     # Делаем скриншот видимой области (без full_page, чтобы не триггерить ресайз окна)
                                     await page.screenshot(path="captcha.png")
                                     await tg_bot.send_captcha_request("captcha.png", f"🚨 <b>Подозрение на капчу!</b>\nБот застрял на вакансии <i>{title}</i>.\n\nПожалуйста, введите текст с картинки прямо в этот чат (если там два слова, введите через пробел):")
                                     
-                                    print("Ожидаем ввод капчи из Telegram...")
-                                    # Ожидание снятия блокировки (когда юзер введет текст)
-                                    await tg_bot.captcha_event.wait()
+                                    print("Ожидаем ввод капчи из Telegram (до 5 минут)...")
+                                    # Ожидание снятия блокировки (когда юзер введет текст).
+                                    # С таймаутом: если Telegram недоступен или ответа нет,
+                                    # не висим вечно, а пропускаем эту вакансию.
+                                    try:
+                                        await asyncio.wait_for(tg_bot.captcha_event.wait(), timeout=300)
+                                    except asyncio.TimeoutError:
+                                        print("⏭️ Капча не решена за 5 минут — пропускаю вакансию.")
+                                        break
                                     
                                     # Вводим текст
                                     solution = tg_bot.captcha_solution
@@ -184,24 +354,14 @@ class HHClient:
                                     break # В случае системной ошибки выходим, чтобы не зациклиться
                             description = await desc_loc.inner_text()
 
-                            # Базовый жесткий фильтр по названию, чтобы не пускать ИИ на очевидные сеньорские позиции, стажировки или неайтишные профессии
-                            title_lower = title.lower()
-                            stop_words = [
-                                "senior", "сеньор", "lead", "лид", "architect", "архитектор", "руководитель", "главный", 
-                                "стажер", "intern", "trainee", "стажировка", "менеджер", "manager", "дизайнер", "designer", 
-                                "hr", "аналитик", "analyst", "преподаватель", "педагог", "маркетолог", "продаж", "1с", "1c",
-                                "слесарь", "диспетчер", "ассистент", "риелтор", "учитель"
-                            ]
-                            if any(word in title_lower for word in stop_words):
-                                print(f"⏩ Пропускаем (Неподходящий грейд/профессия): {title}")
-                                continue
-                            
                             # Анализ ИИ
                             if await is_vacancy_suitable(title, description):
+                                self.stats.ai_pass += 1
                                 print(f"✨ Вакансия подходит: {title}")
-                            
+
                                 cover_letter = await generate_cover_letter(title, description)
-                            
+                                self.stats.letters += 1
+
                                 # Пробуем откликнуться
                                 apply_btn = page.locator('a[data-qa="vacancy-response-link-top"]').first
                                 if await apply_btn.is_visible():
@@ -260,29 +420,45 @@ class HHClient:
                                     if await submit_btn.is_visible():
                                         await submit_btn.click() # РЕАЛЬНЫЙ ОТКЛИК
                                         await asyncio.sleep(2)
-                                    
+
                                         database.add_applied_job(job_id, title, href)
-                                    
+                                        self.stats.applied += 1
+
                                         import html
                                         safe_cover_letter = html.escape(cover_letter)
-                                    
+
                                         if letter_sent:
                                             await send_notification_func(f"✅ Успешный отклик: <a href='{href}'>{title}</a>\n\n<b>Письмо:</b>\n<i>{safe_cover_letter}</i>")
                                         else:
                                             await send_notification_func(f"✅ Отклик без письма: <a href='{href}'>{title}</a>\n\n<i>(Работодатель отключил возможность отправки писем для этой вакансии)</i>")
                                         print(f"✅ Отклик отправлен: {title}")
+                                    else:
+                                        self.stats.apply_failed += 1
+                                        print(f"⚠️ Не нашёл кнопку отправки отклика: {title}")
                                 else:
+                                    self.stats.already += 1
                                     print(f"Кнопка отклика не найдена (возможно, уже откликались): {title}")
                                     database.add_applied_job(job_id, title, href)
                             else:
+                                self.stats.ai_reject += 1
                                 print(f"❌ ИИ отклонил: {title}")
                                 database.add_applied_job(job_id, title, href) # Добавляем, чтобы больше не анализировать
-                            
+
+                        except SkipVacancy:
+                            self.stats.skipped_page += 1  # штатный пропуск, уже залогирован
                         except Exception as e:
+                            # Сюда попадает и сбой связи с моделью (is_vacancy_suitable бросает
+                            # исключение). Вакансию НЕ записываем в базу — вернёмся к ней позже.
                             print(f"Ошибка при обработке вакансии {title}: {e}")
                         finally:
                             await page.close()
                     
+                    # Лимит страниц на запрос, чтобы успеть пройтись по всем запросам
+                    # из SEARCH_QUERIES, а не закопаться в первом же.
+                    if page_num >= MAX_PAGES_PER_QUERY:
+                        print(f"📑 Разобрано {page_num} стр. — лимит на запрос, иду дальше.")
+                        break
+
                     # После того как все вакансии на странице обработаны, проверяем кнопку "Дальше"
                     next_btn = self.page.locator('a[data-qa="pager-next"]')
                     if await next_btn.count() > 0 and await next_btn.is_visible():

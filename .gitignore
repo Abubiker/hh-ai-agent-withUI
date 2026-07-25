@@ -1,6 +1,7 @@
 .env
 state.json
 agent.db
+captcha.png
 __pycache__/
 *.pyc
 .venv/

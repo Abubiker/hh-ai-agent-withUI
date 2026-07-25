@@ -3,12 +3,21 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 from config import TG_BOT_TOKEN, TG_USER_ID
+import control
 
 bot = Bot(token=TG_BOT_TOKEN)
 dp = Dispatcher()
 
 async def send_notification(text: str):
     """Отправляет уведомление пользователю."""
+    # Режим без Telegram: никаких сетевых обращений, только консоль.
+    # HTML-разметку вырезаем, иначе в терминале мешанина из тегов.
+    if not control.telegram_enabled:
+        import re
+        plain = re.sub(r"<[^>]+>", "", text)
+        print(f"[отчёт] {plain}")
+        return
+
     if TG_BOT_TOKEN == "your_bot_token_here" or TG_USER_ID == "your_telegram_id_here":
         print("ОШИБКА: Не настроен Telegram. Уведомление:")
         print(text)
@@ -22,9 +31,17 @@ async def send_notification(text: str):
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     if str(message.from_user.id) == TG_USER_ID:
-        await message.answer("Привет! Я ваш ИИ-агент для поиска работы на HH.ru. Я буду присылать сюда уведомления.")
+        await message.answer("Привет! Я ваш ИИ-агент для поиска работы на HH.ru. Я буду присылать сюда уведомления.\n\nКоманды:\n/stop — остановить агента после текущей вакансии.")
     else:
         await message.answer(f"Извините, у вас нет доступа к этому боту.\nВаш ID: <code>{message.from_user.id}</code>\nСкопируйте его и пропишите в файл .env как TG_USER_ID, после чего перезапустите скрипт.")
+
+@dp.message(Command("stop"))
+async def cmd_stop(message: Message):
+    """Мягкая остановка агента по команде из Telegram."""
+    if str(message.from_user.id) != TG_USER_ID:
+        return
+    control.request_stop()
+    await message.answer("🛑 Принял. Останавливаюсь после текущей вакансии и пришлю итоговую статистику.")
 
 captcha_event = asyncio.Event()
 captcha_solution = ""
@@ -56,9 +73,51 @@ async def handle_text(message: Message):
         await message.answer("✅ Код принят, пробую ввести...")
 
 async def start_bot():
-    """Запускает бота (long-polling)"""
+    """Запускает бота (long-polling) с автопереподключением.
+
+    Раньше любой сетевой сбой при обращении к Telegram (частое дело в РФ)
+    поднимал исключение, которое через asyncio.gather в main.py валило всю
+    программу целиком — вместе с поиском вакансий и уже начатым логином на HH.
+    Теперь обрыв связи с Telegram лишь приводит к паузе и повторной попытке,
+    а основной агент продолжает работать.
+    """
     print("Запуск Telegram-бота...")
-    await dp.start_polling(bot)
+    while True:
+        try:
+            await dp.start_polling(bot, handle_signals=False)
+            break  # штатное завершение polling — выходим
+        except asyncio.CancelledError:
+            raise  # корректная остановка (Ctrl+C) — пробрасываем дальше
+        except Exception as e:
+            print(f"⚠️ Связь с Telegram потеряна ({type(e).__name__}: {e}). "
+                  f"Повтор через 15 секунд...")
+            await asyncio.sleep(15)
+
+async def shutdown_bot(bot_task, timeout: float = 5.0):
+    """Быстро гасит бота при остановке агента.
+
+    aiogram висит на long-polling запросе к Telegram (до ~30 секунд), поэтому
+    безусловный await отменённой задачи выглядел как зависание. Просим
+    диспетчер остановиться, ждём ограниченное время и закрываем сессию.
+    """
+    try:
+        await asyncio.wait_for(dp.stop_polling(), timeout=2)
+    except Exception:
+        pass
+
+    bot_task.cancel()
+    try:
+        await asyncio.wait_for(bot_task, timeout=timeout)
+    except (asyncio.CancelledError, asyncio.TimeoutError):
+        pass
+    except Exception:
+        pass
+
+    try:
+        await asyncio.wait_for(bot.session.close(), timeout=2)
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     asyncio.run(start_bot())

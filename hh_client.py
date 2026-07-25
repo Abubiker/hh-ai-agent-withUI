@@ -12,6 +12,7 @@ from settings import settings
 from urllib.parse import quote_plus
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
+CAPTCHA_FILE = os.path.join(os.path.dirname(__file__), "captcha.png")
 
 
 class SkipVacancy(Exception):
@@ -120,12 +121,18 @@ async def diagnose_page(page):
         return "unknown", f"не удалось разобрать страницу: {e}"
 
 class HHClient:
-    def __init__(self):
+    def __init__(self, sinks=None):
         self.playwright = None
         self.browser = None
         self.context = None
         self.page = None
         self.stats = Stats()
+        # Получатели уведомлений. Нужны в том числе для ввода капчи: её может
+        # принять окно приложения или Telegram, смотря что настроено.
+        if sinks is None:
+            from notify_sinks import build_sinks
+            sinks = build_sinks(telegram=control.telegram_enabled)
+        self.sinks = sinks
 
     async def start(self):
         self.playwright = await async_playwright().start()
@@ -277,38 +284,27 @@ class HHClient:
                                     raise SkipVacancy(reason_code)
 
                                 print(f"🚨 Похоже на капчу/антибот: {title}")
-                                import tg_bot
-
-                                # Без Telegram переслать капчу некому — не зависаем.
-                                # Сохраняем скриншот, чтобы можно было посмотреть глазами.
-                                if not control.telegram_enabled:
-                                    try:
-                                        await page.screenshot(path="captcha.png")
-                                        print("   Скриншот сохранён в captcha.png")
-                                    except Exception:
-                                        pass
-                                    print("⏭️ Режим без Telegram: пропускаю вакансию с капчей.")
-                                    raise SkipVacancy("captcha")
 
                                 try:
-                                    # Делаем скриншот видимой области (без full_page, чтобы не триггерить ресайз окна)
-                                    await page.screenshot(path="captcha.png")
-                                    await tg_bot.send_captcha_request("captcha.png", f"🚨 <b>Подозрение на капчу!</b>\nБот застрял на вакансии <i>{title}</i>.\n\nПожалуйста, введите текст с картинки прямо в этот чат (если там два слова, введите через пробел):")
-                                    
-                                    print("Ожидаем ввод капчи из Telegram (до 5 минут)...")
-                                    # Ожидание снятия блокировки (когда юзер введет текст).
-                                    # С таймаутом: если Telegram недоступен или ответа нет,
-                                    # не висим вечно, а пропускаем эту вакансию.
-                                    try:
-                                        await asyncio.wait_for(tg_bot.captcha_event.wait(), timeout=300)
-                                    except asyncio.TimeoutError:
-                                        print("⏭️ Капча не решена за 5 минут — пропускаю вакансию.")
-                                        break
-                                    
-                                    # Вводим текст
-                                    solution = tg_bot.captcha_solution
+                                    # Скриншот видимой области (без full_page, чтобы не
+                                    # триггерить ресайз окна)
+                                    await page.screenshot(path=CAPTCHA_FILE)
+
+                                    # Ввести текст может окно приложения или Telegram —
+                                    # смотря что настроено. Если некому, получим None.
+                                    solution = await self.sinks.solve_captcha(
+                                        CAPTCHA_FILE,
+                                        f"🚨 <b>Похоже на капчу</b>\nАгент застрял на вакансии "
+                                        f"<i>{title}</i>.\n\nВведите текст с картинки "
+                                        f"(если там два слова — через пробел):")
+
+                                    if not solution:
+                                        print(f"   Скриншот сохранён в {CAPTCHA_FILE}")
+                                        print("⏭️ Капча не решена — пропускаю вакансию.")
+                                        raise SkipVacancy("captcha")
+
                                     print(f"Вводим решение: {solution}")
-                                    
+
                                     input_field = page.locator('input[type="text"]').first
                                     if await input_field.is_visible():
                                         await input_field.click()
@@ -340,15 +336,17 @@ class HHClient:
                                         break # Выходим из цикла решения капчи
                                     else:
                                         try:
-                                            await send_notification_func("❌ Капча решена неверно (или появилась новая). Пробуем еще раз!")
-                                        except:
+                                            await send_notification_func("❌ Капча решена неверно (или появилась новая). Пробуем ещё раз!")
+                                        except Exception:
                                             pass
                                         print("❌ Капча не пройдена. Повторная попытка...")
                                         # Цикл while начнется заново: сделает новый скриншот и попросит ввод
                                         
+                                except SkipVacancy:
+                                    raise  # штатный пропуск, не глушим
                                 except Exception as e:
                                     print(f"Ошибка при обработке капчи: {e}")
-                                    break # В случае системной ошибки выходим, чтобы не зациклиться
+                                    raise SkipVacancy("captcha_error")
                             description = await desc_loc.inner_text()
 
                             # Анализ ИИ

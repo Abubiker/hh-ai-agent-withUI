@@ -2,7 +2,8 @@ import asyncio
 import signal
 import sys
 from database import init_db
-from tg_bot import start_bot, send_notification, shutdown_bot
+from tg_bot import start_bot, shutdown_bot
+from notify_sinks import build_sinks
 from hh_client import HHClient
 from settings import settings
 import control
@@ -64,11 +65,15 @@ def _install_terminal_stop(loop):
 
 
 async def finish(client):
-    """Печатает итоговую статистику (всегда) и по возможности шлёт её в Telegram."""
+    """Печатает итоговую статистику (всегда) и рассылает её получателям."""
     # Синхронный print выполняется даже во время отмены задачи (Ctrl+C).
     print("\n" + client.stats.summary_plain())
     try:
-        await send_notification(client.stats.summary())
+        await client.sinks.notify(client.stats.summary())
+    except Exception:
+        pass
+    try:
+        await client.sinks.close()
     except Exception:
         pass
     try:
@@ -78,7 +83,10 @@ async def finish(client):
 
 
 async def agent_loop():
-    client = HHClient()
+    # Консольный запуск: строки идут в консоль, уведомления — на рабочий стол,
+    # Telegram — если пользователь его включил.
+    sinks = build_sinks(telegram=control.telegram_enabled, desktop=True)
+    client = HHClient(sinks=sinks)
     await client.start()
 
     # Первая авторизация (на первом запуске — ручной вход в браузере)
@@ -103,13 +111,13 @@ async def agent_loop():
         print("   • или команда /stop в Telegram-боте")
     print("=" * 46 + "\n")
 
-    await send_notification("🤖 ИИ-агент запущен и начал работу!\n" + control.duration_text())
+    await client.sinks.notify("🤖 ИИ-агент запущен и начал работу!\n" + control.duration_text())
 
     try:
         while not control.should_stop():
             try:
-                await client.search_and_apply(send_notification)
-                await client.check_chats(send_notification)
+                await client.search_and_apply(client.sinks.notify)
+                await client.check_chats(client.sinks.notify)
             except Exception as e:
                 print(f"Ошибка в основном цикле агента: {e}")
 

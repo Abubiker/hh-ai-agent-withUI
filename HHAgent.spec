@@ -30,8 +30,12 @@ datas += collect_data_files("playwright", include_py_files=True)
 # Звук и иконка уведомлений: без них desktop_notifier падает с
 # "No module named 'desktop_notifier.resources'"
 datas += collect_data_files("desktop_notifier", include_py_files=True)
+# playwright_stealth тащит за собой JS-скрипты; без них падает даже импорт,
+# а вместе с ним и весь модуль агента
+datas += collect_data_files("playwright_stealth", include_py_files=True)
 
 hiddenimports = [
+    "playwright_stealth",
     "webview.platforms.cocoa",
     "pystray._darwin",
     "desktop_notifier.backends.macos",

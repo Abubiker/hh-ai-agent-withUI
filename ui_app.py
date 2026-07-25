@@ -20,6 +20,19 @@ import threading
 import traceback
 from pathlib import Path
 
+# ВАЖНО: до любого импорта playwright. В собранном .app он по умолчанию ищет
+# браузер внутри себя (Contents/Resources/playwright/driver/.local-browsers),
+# где его нет и быть не может — Chromium мы намеренно не бутылим. Указываем
+# обычное пользовательское расположение, куда его ставит `playwright install`.
+if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+    if sys.platform == "darwin":
+        _browsers = Path.home() / "Library" / "Caches" / "ms-playwright"
+    elif os.name == "nt":
+        _browsers = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ms-playwright"
+    else:
+        _browsers = Path.home() / ".cache" / "ms-playwright"
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_browsers)
+
 import webview
 
 import control
@@ -217,7 +230,16 @@ class AgentBridge:
         if self.running:
             return {"ok": False, "error": "Агент уже работает"}
 
-        from hh_client import HHClient
+        # Импорт здесь, а не наверху — но любая ошибка обязана дойти до окна.
+        # Раньше исключение улетало в отклонённый промис, и нажатие «Запустить»
+        # выглядело как «ничего не происходит».
+        try:
+            from hh_client import HHClient  # noqa: F401
+        except Exception as e:
+            msg = f"Не удалось загрузить модуль агента: {type(e).__name__}: {e}"
+            self._log(msg, "error")
+            self._log(traceback.format_exc(), "error")
+            return {"ok": False, "error": msg}
 
         control.configure(int(session_minutes) * 60 or None)
         control.set_telegram_enabled(
@@ -267,7 +289,7 @@ class AgentBridge:
                     self._emit("stats", client.stats.__dict__)
                     self._log(client.stats.summary_plain())
                     try:
-                        await client.sinks.notify(client.stats.summary())
+                        await client.sinks.notify(client.stats.summary(), kind="summary")
                         await client.sinks.close()
                     except Exception:
                         pass
@@ -297,18 +319,48 @@ class AgentBridge:
     # ---------- прочее ----------
 
     def test_notification(self):
-        """Проверка уведомлений. Нужна потому, что macOS показывает их только
-        от подписанного .app — из запущенного скрипта они молча не появляются."""
-        from notify_sinks import DesktopSink
-        sink = DesktopSink()
-        ok, why = sink._available()
-        if not ok:
-            return {"ok": False, "message": why}
-        try:
-            self._submit(sink.notify("HH Agent\nУведомления работают.")).result(timeout=15)
-            return {"ok": True, "message": "Уведомление отправлено — проверьте Центр уведомлений."}
-        except Exception as e:
-            return {"ok": False, "message": str(e)}
+        """Шлёт тестовое во ВСЕ включённые каналы — и на рабочий стол, и в
+        Telegram, чтобы проверить каждый настроенный способ разом."""
+        from notify_sinks import DesktopSink, TelegramSink
+
+        n = settings.data["notifications"]
+        results = []
+
+        if n.get("desktop_enabled"):
+            sink = DesktopSink()
+            ok, why = sink._available()
+            if not ok:
+                results.append(("Рабочий стол", False, why))
+            else:
+                try:
+                    self._submit(sink.notify(
+                        "HH Agent\nТестовое уведомление — всё работает.")).result(timeout=20)
+                    results.append(("Рабочий стол", True, "отправлено"))
+                except Exception as e:
+                    results.append(("Рабочий стол", False, str(e)))
+
+        if n.get("telegram_enabled"):
+            import tg_bot
+            if not tg_bot.bot:
+                results.append(("Telegram", False, "не задан токен бота"))
+            elif not n.get("tg_user_id"):
+                results.append(("Telegram", False, "не указан ваш Telegram ID"))
+            else:
+                try:
+                    control.set_telegram_enabled(True)
+                    self._submit(TelegramSink().notify(
+                        "🔔 <b>Тестовое уведомление</b>\nHH Agent на связи.")).result(timeout=25)
+                    results.append(("Telegram", True, "отправлено"))
+                except Exception as e:
+                    results.append(("Telegram", False, str(e)))
+
+        if not results:
+            return {"ok": False, "message": "Ни один способ уведомлений не включён."}
+
+        ok_all = all(r[1] for r in results)
+        text = "; ".join(f"{name} — {'ОК' if good else 'ошибка: ' + why}"
+                         for name, good, why in results)
+        return {"ok": ok_all, "message": text}
 
     def setup_status(self):
         """Что готово к работе, а что нужно доустановить."""
@@ -431,6 +483,33 @@ def selftest():
                 DesktopSink().notify("HH Agent\nСамопроверка: уведомления работают."))
             print("тестовое уведомление отправлено")
         print("готовность:", loop.run_until_complete(first_run.status()))
+
+        # Всё, что нужно для кнопки «Запустить». Проверяем именно здесь, потому
+        # что модули импортируются лениво и их отсутствие в сборке всплывает
+        # только в момент запуска агента.
+        print("\nмодули агента:")
+        for mod in ("hh_client", "database", "ai_analyzer", "llm_providers",
+                    "notify_sinks", "tg_bot", "control", "playwright_stealth"):
+            try:
+                __import__(mod)
+                print(f"  ✅ {mod}")
+            except Exception as e:
+                print(f"  ❌ {mod}: {type(e).__name__}: {e}")
+
+        print("\nзапуск браузера:")
+        async def try_browser():
+            from playwright.async_api import async_playwright
+            pw = await async_playwright().start()
+            b = await pw.chromium.launch(headless=True)
+            page = await b.new_page()
+            await page.goto("about:blank")
+            await b.close()
+            await pw.stop()
+        try:
+            loop.run_until_complete(asyncio.wait_for(try_browser(), timeout=60))
+            print("  ✅ браузер поднимается")
+        except Exception as e:
+            print(f"  ❌ {type(e).__name__}: {str(e)[:300]}")
     finally:
         loop.close()
     return 0

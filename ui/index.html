@@ -267,6 +267,15 @@
       </div>
     </div>
     <div class="card">
+      <h2>О чём сообщать</h2>
+      <p class="hint">Касается только уведомлений. В журнале окна видно всё в любом случае.</p>
+      <label class="inline"><input type="checkbox" class="ev" data-ev="applied"><span>Отклик отправлен</span></label>
+      <label class="inline"><input type="checkbox" class="ev" data-ev="reply"><span>Ответ от работодателя</span></label>
+      <label class="inline"><input type="checkbox" class="ev" data-ev="captcha"><span>Нужна помощь с капчей</span></label>
+      <label class="inline"><input type="checkbox" class="ev" data-ev="summary"><span>Итоги сеанса</span></label>
+      <label class="inline"><input type="checkbox" class="ev" data-ev="error"><span>Ошибки в работе</span></label>
+    </div>
+    <div class="card">
       <h2>Файл настроек</h2>
       <p class="hint" id="settingsPath"></p>
       <button id="btnOpenFolder">Показать в Finder</button>
@@ -380,6 +389,8 @@ async function loadSettings() {
   $("desktopEnabled").checked = !!s.notifications.desktop_enabled;
   $("telegramEnabled").checked = !!s.notifications.telegram_enabled;
   $("tgUserId").value = s.notifications.tg_user_id || "";
+  const ev = s.notifications.events || {};
+  document.querySelectorAll(".ev").forEach(c => c.checked = ev[c.dataset.ev] !== false);
   if (s._secrets.tg_bot_token) $("tgToken").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.anthropic_api_key) $("anthropicKey").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.openai_api_key) $("openaiKey").placeholder = "сохранён — оставьте пустым";
@@ -416,6 +427,8 @@ function collect() {
       desktop_enabled: $("desktopEnabled").checked,
       telegram_enabled: $("telegramEnabled").checked,
       tg_user_id: $("tgUserId").value.trim(),
+      events: Object.fromEntries([...document.querySelectorAll(".ev")]
+        .map(c => [c.dataset.ev, c.checked])),
     },
     _secrets: {
       tg_bot_token: $("tgToken").value.trim(),
@@ -450,9 +463,16 @@ async function refreshModels(selected) {
 
 // Обработчики
 $("btnStart").onclick = async () => {
-  await window.pywebview.api.save_settings(collect());
-  const r = await window.pywebview.api.start_agent(+$("duration").value);
-  if (!r.ok) addLog("Не удалось запустить: " + r.error, "error");
+  try {
+    addLog("Запускаю агента…");
+    await window.pywebview.api.save_settings(collect());
+    const r = await window.pywebview.api.start_agent(+$("duration").value);
+    if (r && !r.ok) addLog("Не удалось запустить: " + (r.error || "неизвестная ошибка"), "error");
+  } catch (e) {
+    // Без этого исключение из Python уходило в отклонённый промис,
+    // и кнопка выглядела нерабочей.
+    addLog("Ошибка при запуске: " + (e && e.message ? e.message : e), "error");
+  }
 };
 $("btnStop").onclick = () => window.pywebview.api.stop_agent();
 $("btnCheck").onclick = async () => {

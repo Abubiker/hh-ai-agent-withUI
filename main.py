@@ -69,7 +69,7 @@ async def finish(client):
     # Синхронный print выполняется даже во время отмены задачи (Ctrl+C).
     print("\n" + client.stats.summary_plain())
     try:
-        await client.sinks.notify(client.stats.summary())
+        await client.sinks.notify(client.stats.summary(), kind="summary")
     except Exception:
         pass
     try:

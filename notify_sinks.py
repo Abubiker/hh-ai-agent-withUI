@@ -167,8 +167,21 @@ class SinkGroup(Sink):
     def can_solve_captcha(self) -> bool:
         return any(s.can_solve_captcha for s in self.sinks)
 
-    async def notify(self, text: str, level: str = "info"):
+    @staticmethod
+    def _event_enabled(kind: str | None) -> bool:
+        """Пользователь выбирает, о чём его беспокоить. Журнал в окне это
+        не затрагивает — там видно всё."""
+        if not kind:
+            return True
+        from settings import settings
+        return bool(settings.data["notifications"].get("events", {}).get(kind, True))
+
+    async def notify(self, text: str, level: str = "info", kind: str | None = None):
+        allowed = self._event_enabled(kind)
         for sink in self.sinks:
+            # Окно показывает всё: это журнал работы, а не уведомление.
+            if not allowed and sink.name != "ui":
+                continue
             try:
                 await sink.notify(text, level)
             except Exception as e:

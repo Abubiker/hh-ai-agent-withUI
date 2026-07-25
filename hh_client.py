@@ -333,14 +333,14 @@ class HHClient:
                                     desc_loc = page.locator('div[data-qa="vacancy-description"]')
                                     if await desc_loc.is_visible():
                                         try:
-                                            await send_notification_func("✅ Капча успешно пройдена! Бот продолжает работу.")
+                                            await send_notification_func("✅ Капча успешно пройдена! Бот продолжает работу.", kind="captcha")
                                         except:
                                             pass
                                         print("✅ Капча пройдена!")
                                         break # Выходим из цикла решения капчи
                                     else:
                                         try:
-                                            await send_notification_func("❌ Капча решена неверно (или появилась новая). Пробуем ещё раз!")
+                                            await send_notification_func("❌ Капча решена неверно (или появилась новая). Пробуем ещё раз!", kind="captcha")
                                         except Exception:
                                             pass
                                         print("❌ Капча не пройдена. Повторная попытка...")
@@ -427,9 +427,9 @@ class HHClient:
                                         safe_cover_letter = html.escape(cover_letter)
 
                                         if letter_sent:
-                                            await send_notification_func(f"✅ Успешный отклик: <a href='{href}'>{title}</a>\n\n<b>Письмо:</b>\n<i>{safe_cover_letter}</i>")
+                                            await send_notification_func(f"✅ Успешный отклик: <a href='{href}'>{title}</a>\n\n<b>Письмо:</b>\n<i>{safe_cover_letter}</i>", kind="applied")
                                         else:
-                                            await send_notification_func(f"✅ Отклик без письма: <a href='{href}'>{title}</a>\n\n<i>(Работодатель отключил возможность отправки писем для этой вакансии)</i>")
+                                            await send_notification_func(f"✅ Отклик без письма: <a href='{href}'>{title}</a>\n\n<i>(Работодатель отключил возможность отправки писем для этой вакансии)</i>", kind="applied")
                                         print(f"✅ Отклик отправлен: {title}")
                                     else:
                                         self.stats.apply_failed += 1
@@ -498,7 +498,7 @@ class HHClient:
                     
                     if not database.is_message_processed(msg_id):
                         database.add_processed_message(msg_id, chat_link, last_msg)
-                        await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='https://hh.ru{chat_link}'>Перейти к чату</a>")
+                        await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='https://hh.ru{chat_link}'>Перейти к чату</a>", kind="reply")
                 
                 await chat_page.close()
 

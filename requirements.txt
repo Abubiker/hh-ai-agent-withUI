@@ -4,3 +4,4 @@ python-dotenv
 requests
 aiohttp
 playwright-stealth
+keyring

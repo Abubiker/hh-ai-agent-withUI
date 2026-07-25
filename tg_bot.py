@@ -2,10 +2,15 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
-from config import TG_BOT_TOKEN, TG_USER_ID
+from settings import settings
 import control
 
-bot = Bot(token=TG_BOT_TOKEN)
+TG_BOT_TOKEN = settings.tg_bot_token
+TG_USER_ID = settings.tg_user_id
+
+# Бот создаётся только при наличии токена: Bot("") падает с ошибкой валидации,
+# а приложение должно спокойно запускаться и без настроенного Telegram.
+bot = Bot(token=TG_BOT_TOKEN) if TG_BOT_TOKEN else None
 dp = Dispatcher()
 
 async def send_notification(text: str):
@@ -18,11 +23,11 @@ async def send_notification(text: str):
         print(f"[отчёт] {plain}")
         return
 
-    if TG_BOT_TOKEN == "your_bot_token_here" or TG_USER_ID == "your_telegram_id_here":
-        print("ОШИБКА: Не настроен Telegram. Уведомление:")
+    if not bot or not TG_USER_ID:
+        print("ОШИБКА: Не настроен Telegram (нет токена или ID). Уведомление:")
         print(text)
         return
-        
+
     try:
         await bot.send_message(chat_id=TG_USER_ID, text=text, parse_mode="HTML")
     except Exception as e:
@@ -33,7 +38,7 @@ async def cmd_start(message: Message):
     if str(message.from_user.id) == TG_USER_ID:
         await message.answer("Привет! Я ваш ИИ-агент для поиска работы на HH.ru. Я буду присылать сюда уведомления.\n\nКоманды:\n/stop — остановить агента после текущей вакансии.")
     else:
-        await message.answer(f"Извините, у вас нет доступа к этому боту.\nВаш ID: <code>{message.from_user.id}</code>\nСкопируйте его и пропишите в файл .env как TG_USER_ID, после чего перезапустите скрипт.")
+        await message.answer(f"Извините, у вас нет доступа к этому боту.\nВаш ID: <code>{message.from_user.id}</code>\nУкажите его в настройках приложения (раздел «Уведомления») и перезапустите агента.")
 
 @dp.message(Command("stop"))
 async def cmd_stop(message: Message):
@@ -48,10 +53,10 @@ captcha_solution = ""
 
 async def send_captcha_request(filepath: str, text: str):
     """Отправляет фото капчи пользователю."""
-    if TG_BOT_TOKEN == "your_bot_token_here" or TG_USER_ID == "your_telegram_id_here":
+    if not bot or not TG_USER_ID:
         print("ОШИБКА: Не настроен Telegram. Капча сохранена в", filepath)
         return
-        
+
     try:
         from aiogram.types import FSInputFile
         photo = FSInputFile(filepath)

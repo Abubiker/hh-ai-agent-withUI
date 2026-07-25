@@ -4,7 +4,7 @@ import sys
 from database import init_db
 from tg_bot import start_bot, send_notification, shutdown_bot
 from hh_client import HHClient
-from config import CYCLE_PAUSE_MINUTES
+from settings import settings
 import control
 
 # Варианты длительности сеанса: ключ ввода -> (секунды, подпись)
@@ -117,9 +117,9 @@ async def agent_loop():
                 break
 
             print(f"😴 Круг закончен. Новых вакансий пока нет — жду "
-                  f"{CYCLE_PAUSE_MINUTES} мин и проверю снова "
+                  f"{settings.cycle_pause_minutes} мин и проверю снова "
                   f"(можно остановить в любой момент).")
-            await control.sleep_or_stop(CYCLE_PAUSE_MINUTES * 60)
+            await control.sleep_or_stop(settings.cycle_pause_minutes * 60)
     finally:
         await finish(client)
 

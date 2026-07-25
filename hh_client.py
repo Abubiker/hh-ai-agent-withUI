@@ -8,7 +8,7 @@ import database
 import control
 from stats import Stats
 from ai_analyzer import is_vacancy_suitable, generate_cover_letter
-from config import SEARCH_QUERIES, MAX_PAGES_PER_QUERY, SEARCH_IN_TITLE_ONLY
+from settings import settings
 from urllib.parse import quote_plus
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
@@ -188,19 +188,16 @@ class HHClient:
 
     async def search_and_apply(self, send_notification_func):
         print("Начинаем поиск вакансий...")
-        for query in SEARCH_QUERIES:
+        for query in settings.search_queries:
             if control.should_stop():
                 print("⏹️ Получен сигнал остановки — прерываю поиск.")
                 return
             print(f"\n======================================")
             print(f"🔍 Поиск по запросу: {query}")
             print(f"======================================")
-            
-            # Два режима поиска: сначала Москва (все графики), потом РФ (только удаленка)
-            search_configs = [
-                {"name": "Москва (любой график)", "params": "&area=1"},
-                {"name": "Вся Россия (только удаленка)", "params": "&area=113&schedule=remote"}
-            ]
+
+            # Регионы и режимы поиска задаются в настройках
+            search_configs = settings.regions
 
             for config in search_configs:
                 print(f"📍 Режим: {config['name']}")
@@ -209,11 +206,11 @@ class HHClient:
                 # moreThan6 — чтобы в выдачу попадали и старшие позиции (Senior/Ведущий),
                 # на них теперь тоже откликаемся. Слишком высокие требования отсеет ИИ.
                 # search_field=name — искать слова запроса только в названии вакансии.
-                field = "&search_field=name" if SEARCH_IN_TITLE_ONLY else ""
+                field = "&search_field=name" if settings.title_only else ""
+                exp = "".join(f"&experience={e}" for e in settings.experience)
                 url = (f"https://hh.ru/search/vacancy?text={quote_plus(query)}"
                        f"{field}&order_by=publication_time"
-                       f"&experience=between1And3&experience=between3And6"
-                       f"&experience=moreThan6{config['params']}")
+                       f"{exp}{config['params']}")
                 await self.page.goto(url)
                 await asyncio.sleep(3)
                 await handle_vpn_check(self.page)
@@ -378,7 +375,7 @@ class HHClient:
                                 
                                     # Шаг 0: Выбор нужного резюме (если их несколько)
                                     try:
-                                        from config import TARGET_RESUME_NAME
+                                        TARGET_RESUME_NAME = settings.target_resume_name
                                         if TARGET_RESUME_NAME:
                                             resume_dropdown = page.locator('[data-qa*="resume-select"], [data-qa*="resume-selector"], [data-qa="vacancy-response-resume-selector"]').first
                                             if await resume_dropdown.is_visible():
@@ -454,8 +451,8 @@ class HHClient:
                             await page.close()
                     
                     # Лимит страниц на запрос, чтобы успеть пройтись по всем запросам
-                    # из SEARCH_QUERIES, а не закопаться в первом же.
-                    if page_num >= MAX_PAGES_PER_QUERY:
+                    # из настроек, а не закопаться в первом же.
+                    if page_num >= settings.max_pages_per_query:
                         print(f"📑 Разобрано {page_num} стр. — лимит на запрос, иду дальше.")
                         break
 

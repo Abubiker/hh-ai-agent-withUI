@@ -1,12 +1,9 @@
-import asyncio
-import aiohttp
-from config import OLLAMA_URL, OLLAMA_MODEL, MY_RESUME_SUMMARY
+from settings import settings
+from llm_providers import complete_with_retry, ProviderError
 
-# Размер контекста для Ollama. Профиль (~600 токенов) + длинное описание вакансии
-# (~2500) + сам промпт (~700) + письмо на выходе (~800) уже не влезают в дефолтные 4096.
-NUM_CTX = 16384
 
 async def generate_cover_letter(vacancy_title: str, vacancy_description: str) -> str:
+    MY_RESUME_SUMMARY = settings.resume_summary
     prompt = f"""
 Напиши сопроводительное письмо для отклика на вакансию.
 Мой профиль:
@@ -41,37 +38,22 @@ async def generate_cover_letter(vacancy_title: str, vacancy_description: str) ->
 Дмитрий
 """
     
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        # Отключаем "размышления" у thinking-моделей (Qwen3.5 и т.п.),
-        # иначе они утекают в текст письма, которое уходит HR.
-        "think": False,
-        # Ollama по умолчанию дает всего 4096 токенов и МОЛЧА обрезает промпт с начала.
-        # Резюме стоит в начале промпта, поэтому на длинных вакансиях оно вырезалось
-        # первым — и письмо писалось без опыта, без ошибки в логах.
-        "options": {"num_ctx": NUM_CTX}
-    }
-
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(OLLAMA_URL, json=payload) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    text = data.get("response", "").strip()
-                    # Жесткая очистка от частых галлюцинаций LLM
-                    text = text.replace('"', '').replace("'", "")
-                    if "Here is" in text or "Here's" in text:
-                        text = text.split("\n\n", 1)[-1]
-                    if "Note:" in text:
-                        text = text.split("Note:")[0].strip()
-                    return text.strip()
-    except Exception as e:
-        print(f"Ошибка при обращении к Ollama (письмо): {e}")
+        # deterministic=False: письму нужна живость, в отличие от классификатора.
+        text = await complete_with_retry(prompt, deterministic=False, timeout=180)
+        # Жесткая очистка от частых галлюцинаций LLM
+        text = text.replace('"', '').replace("'", "")
+        if "Here is" in text or "Here's" in text:
+            text = text.split("\n\n", 1)[-1]
+        if "Note:" in text:
+            text = text.split("Note:")[0].strip()
+        return text.strip()
+    except ProviderError as e:
+        print(f"Ошибка при обращении к модели (письмо): {e}")
         return "Здравствуйте! Прошу рассмотреть мое резюме на эту вакансию. Буду рад обсудить детали на собеседовании."
 
 async def is_vacancy_suitable(vacancy_title: str, vacancy_description: str) -> bool:
+    MY_RESUME_SUMMARY = settings.resume_summary
     prompt = f"""
 Твоя задача — оценить, подходит ли вакансия под мои критерии поиска.
 Мои требования и профиль (внимательно учти желаемую зарплату, локацию и стек технологий):
@@ -118,37 +100,12 @@ YES — если подходит (или если сомневаешься).
 NO — только при явном дисквалификаторе выше.
 """
     
-    payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        # Без этого "рассуждения" модели попадают в ответ, а в них почти всегда
-        # встречается YES по ходу размышления — и фильтр пропускает всё подряд.
-        "think": False,
-        # См. комментарий в generate_cover_letter: без num_ctx длинная вакансия
-        # вытесняет из промпта мой профиль, и фильтр судит вслепую.
-        # temperature=0: это бинарный классификатор, а не творческая задача. На дефолтной
-        # температуре одна и та же вакансия давала то YES, то NO от прогона к прогону.
-        "options": {"num_ctx": NUM_CTX, "temperature": 0}
-    }
-
-    # Упавший или подвисший запрос раньше возвращал False и был неотличим от честного
-    # "не подходит" — подходящая вакансия молча улетала в мусор. Даем второй шанс.
-    for attempt in (1, 2):
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(OLLAMA_URL, json=payload, timeout=120) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    answer = data.get("response", "").strip().upper()
-                    return "YES" in answer
-        except Exception as e:
-            print(f"Ошибка при обращении к Ollama (анализ), попытка {attempt}/2: {e}")
-            if attempt == 1:
-                await asyncio.sleep(5)
-
-    # Обе попытки провалились. НЕ возвращаем False: вызывающий код тогда пометил бы
-    # вакансию как обработанную (add_applied_job) и больше никогда к ней не вернулся.
-    # Вместо этого бросаем исключение — обработчик вакансии его перехватит, вакансию
-    # НЕ запишет в базу, и на следующем круге агента она будет разобрана заново.
-    raise RuntimeError("Ollama не ответила на запрос анализа после 2 попыток")
+    # deterministic=True — это бинарный классификатор, а не творческая задача.
+    # На дефолтной температуре одна и та же вакансия давала то YES, то NO.
+    #
+    # Если модель не ответила, complete_with_retry бросает ProviderError и мы его
+    # НЕ глушим. Вернуть False нельзя: вызывающий код пометил бы вакансию
+    # обработанной (add_applied_job) и больше никогда к ней не вернулся. Исключение
+    # же означает «разберём на следующем круге».
+    answer = await complete_with_retry(prompt, deterministic=True, timeout=120)
+    return "YES" in answer.strip().upper()

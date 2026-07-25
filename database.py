@@ -1,7 +1,10 @@
 import sqlite3
-import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "agent.db")
+from settings import user_file
+
+# База в папке пользователя, а не рядом с кодом: в собранном .app соседняя
+# папка временная, и история откликов терялась бы при каждом запуске.
+DB_PATH = str(user_file("agent.db"))
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)

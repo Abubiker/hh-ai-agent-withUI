@@ -13,6 +13,7 @@
 """
 import json
 import os
+import shutil
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -81,6 +82,29 @@ def data_dir() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / APP_NAME
+
+
+def user_file(name: str) -> Path:
+    """Путь к пользовательскому файлу (сессия HH, база откликов).
+
+    Класть их рядом с кодом нельзя: внутри собранного .app это временная
+    распакованная папка, доступная только на чтение и стираемая при выходе —
+    вход в аккаунт слетал бы при каждом запуске.
+
+    Если файл остался от консольной версии, переносим его один раз.
+    """
+    target = data_dir() / name
+    if not target.exists():
+        legacy = Path(__file__).resolve().parent / name
+        try:
+            if legacy.exists() and legacy != target:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(target))
+                print(f"✅ {name} перенесён в {target.parent}")
+        except Exception as e:
+            print(f"⚠️ Не удалось перенести {name}: {e}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

@@ -61,6 +61,7 @@ class AgentBridge:
 
     def __init__(self):
         self.window = None
+        self.tray = None
         self.loop = None
         self.thread = None
         self.client = None
@@ -73,6 +74,12 @@ class AgentBridge:
 
     def _emit(self, event: str, payload=None):
         """Отправляет событие в интерфейс."""
+        # Иконка в строке меню тоже должна отражать состояние
+        if event == "state" and self.tray:
+            try:
+                self.tray.icon = _make_icon_image(bool(payload.get("running")))
+            except Exception:
+                pass
         if not self.window:
             return
         try:
@@ -289,6 +296,42 @@ class AgentBridge:
 
     # ---------- прочее ----------
 
+    def test_notification(self):
+        """Проверка уведомлений. Нужна потому, что macOS показывает их только
+        от подписанного .app — из запущенного скрипта они молча не появляются."""
+        from notify_sinks import DesktopSink
+        sink = DesktopSink()
+        ok, why = sink._available()
+        if not ok:
+            return {"ok": False, "message": why}
+        try:
+            self._submit(sink.notify("HH Agent\nУведомления работают.")).result(timeout=15)
+            return {"ok": True, "message": "Уведомление отправлено — проверьте Центр уведомлений."}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    def setup_status(self):
+        """Что готово к работе, а что нужно доустановить."""
+        import first_run
+        try:
+            return self._submit(first_run.status()).result(timeout=20)
+        except Exception as e:
+            return {"error": str(e)}
+
+    def install_browser(self):
+        """Ставит Chromium: внутрь приложения он не входит осознанно."""
+        import first_run
+
+        async def run():
+            self._log("Устанавливаю браузер для Playwright…")
+            ok, msg = await first_run.install_browser(
+                on_progress=lambda line: self._log(line))
+            self._log(("✅ " if ok else "❌ ") + msg, "info" if ok else "error")
+            self._emit("setup_done", {"ok": ok, "message": msg})
+
+        self._submit(run())
+        return {"ok": True}
+
     def open_settings_folder(self):
         try:
             os.system(f'open "{settings.path.parent}"')
@@ -307,7 +350,94 @@ class AgentBridge:
         }
 
 
+def _make_icon_image(running: bool):
+    """Рисует иконку для строки меню: кружок, зелёный когда агент работает."""
+    from PIL import Image, ImageDraw
+    size = 44
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fill = (48, 209, 88, 255) if running else (0, 0, 0, 0)
+    outline = (48, 209, 88, 255) if running else (110, 110, 115, 255)
+    d.ellipse([7, 7, size - 8, size - 8], fill=fill, outline=outline, width=4)
+    return img
+
+
+def build_tray(bridge):
+    """Иконка в строке меню. Полноценное окно остаётся основным интерфейсом,
+    отсюда — только быстрые действия."""
+    import pystray
+    from pystray import MenuItem as Item
+
+    def toggle(icon, item):
+        if bridge.running:
+            bridge.stop_agent()
+        else:
+            bridge.start_agent(settings.data["schedule"].get("session_minutes", 0))
+        icon.icon = _make_icon_image(bridge.running)
+
+    def show_window(icon, item):
+        try:
+            bridge.window.show()
+        except Exception:
+            pass
+
+    def quit_app(icon, item):
+        try:
+            if bridge.running:
+                bridge.stop_agent()
+        finally:
+            icon.stop()
+            try:
+                bridge.window.destroy()
+            except Exception:
+                pass
+
+    menu = pystray.Menu(
+        Item(lambda i: "Остановить агента" if bridge.running else "Запустить агента", toggle),
+        Item("Показать окно", show_window, default=True),
+        pystray.Menu.SEPARATOR,
+        Item("Выход", quit_app),
+    )
+    icon = pystray.Icon("hh-agent", _make_icon_image(False), "HH Agent", menu)
+    bridge.tray = icon
+    return icon
+
+
+def selftest():
+    """Проверка окружения без открытия окна: HHAGENT_SELFTEST=1 или флаг
+    --selftest. Нужна, чтобы убедиться, что в собранном .app действительно
+    работают уведомления — из обычного скрипта они молча не появляются."""
+    import first_run
+    from notify_sinks import DesktopSink
+
+    loop = asyncio.new_event_loop()
+    try:
+        print("bundle_id:", _bundle_id())
+        ok, why = DesktopSink()._available()
+        print("уведомления:", "доступны" if ok else f"недоступны — {why}")
+        if ok:
+            loop.run_until_complete(
+                DesktopSink().notify("HH Agent\nСамопроверка: уведомления работают."))
+            print("тестовое уведомление отправлено")
+        print("готовность:", loop.run_until_complete(first_run.status()))
+    finally:
+        loop.close()
+    return 0
+
+
+def _bundle_id():
+    try:
+        from rubicon.objc import ObjCClass
+        b = ObjCClass("NSBundle").mainBundle
+        return str(b.bundleIdentifier) if b and b.bundleIdentifier else None
+    except Exception as e:
+        return f"(не определить: {e})"
+
+
 def main():
+    if os.environ.get("HHAGENT_SELFTEST") or "--selftest" in sys.argv:
+        sys.exit(selftest())
+
     bridge = AgentBridge()
     window = webview.create_window(
         "HH Agent",
@@ -323,9 +453,23 @@ def main():
     bridge._stdout_backup = sys.stdout
     sys.stdout = LogTee(sys.stdout, lambda line: bridge._log(line))
 
+    # Иконку в строке меню поднимаем ДО webview.start(): на macOS она не
+    # заводит свой цикл событий, а пользуется тем, который создаст интерфейс.
+    tray = None
+    try:
+        tray = build_tray(bridge)
+        tray.run_detached()
+    except Exception as e:
+        print(f"ℹ️ Иконка в строке меню недоступна: {e}")
+
     try:
         webview.start()  # блокирует главный поток до закрытия окна
     finally:
+        if tray:
+            try:
+                tray.stop()
+            except Exception:
+                pass
         sys.stdout = bridge._stdout_backup
         if bridge.running and bridge.loop:
             bridge.loop.call_soon_threadsafe(control.request_stop)

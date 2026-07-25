@@ -9,3 +9,7 @@ venv/
 env/
 .vscode/
 .idea/
+build/
+dist/
+build_assets/
+*.spec.bak

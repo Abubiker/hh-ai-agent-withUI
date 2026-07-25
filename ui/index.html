@@ -128,6 +128,15 @@
 <main>
   <!-- Работа -->
   <section class="tab active" id="tab-run">
+    <div class="card" id="setupCard" style="display:none">
+      <h2>Готовность к работе</h2>
+      <p class="hint">Что нужно доделать, прежде чем запускать агента.</p>
+      <div id="setupList"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="fixed" id="btnInstallBrowser" style="display:none">Установить браузер</button>
+        <button class="fixed" id="btnRecheck">Проверить снова</button>
+      </div>
+    </div>
     <div class="card">
       <h2>Статистика сеанса</h2>
       <div class="stats" id="stats"></div>
@@ -244,6 +253,10 @@
       <h2>Куда сообщать</h2>
       <label class="inline"><input type="checkbox" id="desktopEnabled"><span>Уведомления на рабочем столе</span></label>
       <p class="hint">Работают только в собранном приложении: macOS не показывает уведомления от неподписанных программ.</p>
+      <div class="row" style="margin-top:8px">
+        <button class="fixed" id="btnTestNotify">Проверить уведомления</button>
+        <span class="hint" id="notifyStatus" style="margin:0"></span>
+      </div>
       <label class="inline" style="margin-top:12px"><input type="checkbox" id="telegramEnabled"><span>Дублировать в Telegram</span></label>
       <div id="tgFields" style="margin-top:10px">
         <label><span>Ваш Telegram ID</span><input id="tgUserId" placeholder="узнать у @userinfobot"></label>
@@ -325,6 +338,10 @@ window.onAgentEvent = (event, data) => {
     $("pullBox").style.display = "block";
     $("pullStatus").textContent = data.status + (data.percent ? ` — ${data.percent}%` : "");
     $("pullBar").style.width = data.percent + "%";
+  }
+  else if (event === "setup_done") {
+    $("btnInstallBrowser").disabled = false;
+    refreshSetup();
   }
   else if (event === "pull_done") {
     $("pullStatus").textContent = data.ok ? "Готово: " + data.model : "Ошибка: " + data.error;
@@ -451,6 +468,42 @@ $("btnPull").onclick = async () => {
   await window.pywebview.api.pull_model(name);
 };
 $("btnOpenFolder").onclick = () => window.pywebview.api.open_settings_folder();
+$("btnTestNotify").onclick = async () => {
+  $("notifyStatus").textContent = "Отправляю…";
+  const r = await window.pywebview.api.test_notification();
+  $("notifyStatus").innerHTML = `<span class="pill ${r.ok ? "ok" : "bad"}">${r.ok ? "OK" : "Нет"}</span> ${r.message}`;
+};
+
+const SETUP_ROWS = [
+  ["browser", "Браузер для Playwright", "нужен для работы с HH"],
+  ["logged_in", "Вход в аккаунт HH", "выполняется при первом запуске агента"],
+  ["resume", "Название резюме", "вкладка «Резюме и поиск»"],
+  ["summary", "Профиль для писем", "вкладка «Резюме и поиск»"],
+];
+
+async function refreshSetup() {
+  const s = await window.pywebview.api.setup_status();
+  if (s.error) return;
+  const rows = SETUP_ROWS.map(([k, label, hint]) => {
+    const ok = !!s[k];
+    return `<div class="row" style="margin-bottom:6px">
+      <span style="flex:none;width:20px">${ok ? "✅" : "⚠️"}</span>
+      <span>${label}${ok ? "" : ` <span class="hint">— ${hint}</span>`}</span></div>`;
+  });
+  if (!s.ollama_running && !s.ollama_installed) {
+    rows.push(`<div class="row" style="margin-bottom:6px"><span style="flex:none;width:20px">⚠️</span>
+      <span>Ollama не найдена <span class="hint">— либо установите её, либо выберите облачную модель</span></span></div>`);
+  }
+  const allOk = SETUP_ROWS.every(([k]) => s[k]);
+  $("setupCard").style.display = allOk ? "none" : "";
+  $("setupList").innerHTML = rows.join("");
+  $("btnInstallBrowser").style.display = s.browser ? "none" : "";
+}
+$("btnRecheck").onclick = refreshSetup;
+$("btnInstallBrowser").onclick = async () => {
+  $("btnInstallBrowser").disabled = true;
+  await window.pywebview.api.install_browser();
+};
 $("provider").onchange = () => { syncProvider(); scheduleSave(); };
 $("telegramEnabled").onchange = () => { toggleTg(); scheduleSave(); };
 document.querySelectorAll("input, textarea, select").forEach(el => {
@@ -476,6 +529,7 @@ window.addEventListener("pywebviewready", async () => {
   const st = await window.pywebview.api.get_state();
   setRunning(st.running);
   renderStats(st.stats);
+  await refreshSetup();
   addLog("Готов к работе. Проверьте настройки и нажмите «Запустить».");
 });
 </script>

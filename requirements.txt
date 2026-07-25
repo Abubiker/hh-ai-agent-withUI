@@ -7,3 +7,8 @@ playwright-stealth
 keyring
 desktop-notifier
 pywebview
+
+# сборка
+pyinstaller
+pystray
+pillow

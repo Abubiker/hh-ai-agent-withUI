@@ -11,8 +11,12 @@ from ai_analyzer import is_vacancy_suitable, generate_cover_letter
 from settings import settings
 from urllib.parse import quote_plus
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "state.json")
-CAPTCHA_FILE = os.path.join(os.path.dirname(__file__), "captcha.png")
+from settings import user_file
+
+# Файлы лежат в папке пользователя, а не рядом с кодом: внутри собранного
+# .app соседняя папка временная и только для чтения.
+STATE_FILE = str(user_file("state.json"))
+CAPTCHA_FILE = str(user_file("captcha.png"))
 
 
 class SkipVacancy(Exception):

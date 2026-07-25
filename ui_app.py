@@ -332,6 +332,17 @@ class AgentBridge:
         self._submit(run())
         return {"ok": True}
 
+    def open_url(self, url: str):
+        """Открывает ссылку в браузере пользователя (например, страницу Ollama)."""
+        if not url.startswith(("http://", "https://")):
+            return {"ok": False, "error": "недопустимая ссылка"}
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def open_settings_folder(self):
         try:
             os.system(f'open "{settings.path.parent}"')

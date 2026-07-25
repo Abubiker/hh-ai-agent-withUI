@@ -134,6 +134,7 @@
       <div id="setupList"></div>
       <div class="row" style="margin-top:10px">
         <button class="fixed" id="btnInstallBrowser" style="display:none">Установить браузер</button>
+        <button class="fixed" id="btnGetOllama" style="display:none">Скачать Ollama</button>
         <button class="fixed" id="btnRecheck">Проверить снова</button>
       </div>
     </div>
@@ -212,6 +213,8 @@
 
     <div class="card" data-p="ollama">
       <h2>Ollama</h2>
+      <p class="hint">Модель крутится в отдельной программе Ollama — приложение ею только управляет.
+        Ollama ставится один раз, модели скачиваются сюда же и остаются на компьютере.</p>
       <label><span>Адрес сервера</span><input id="ollamaUrl" placeholder="http://localhost:11434"></label>
       <label><span>Модель</span>
         <div class="row">
@@ -490,20 +493,30 @@ async function refreshSetup() {
       <span style="flex:none;width:20px">${ok ? "✅" : "⚠️"}</span>
       <span>${label}${ok ? "" : ` <span class="hint">— ${hint}</span>`}</span></div>`;
   });
-  if (!s.ollama_running && !s.ollama_installed) {
+  // Модель нужна только для локального провайдера. С облачным Ollama не требуется.
+  const localProvider = $("provider").value === "ollama";
+  let ollamaOk = true;
+  if (localProvider && !s.ollama_installed) {
+    ollamaOk = false;
     rows.push(`<div class="row" style="margin-bottom:6px"><span style="flex:none;width:20px">⚠️</span>
-      <span>Ollama не найдена <span class="hint">— либо установите её, либо выберите облачную модель</span></span></div>`);
+      <span>Ollama не установлена <span class="hint">— она запускает модель на вашем компьютере</span></span></div>`);
+  } else if (localProvider && !s.ollama_running) {
+    ollamaOk = false;
+    rows.push(`<div class="row" style="margin-bottom:6px"><span style="flex:none;width:20px">⚠️</span>
+      <span>Ollama установлена, но не запущена <span class="hint">— откройте приложение Ollama</span></span></div>`);
   }
-  const allOk = SETUP_ROWS.every(([k]) => s[k]);
+  const allOk = SETUP_ROWS.every(([k]) => s[k]) && ollamaOk;
   $("setupCard").style.display = allOk ? "none" : "";
   $("setupList").innerHTML = rows.join("");
   $("btnInstallBrowser").style.display = s.browser ? "none" : "";
+  $("btnGetOllama").style.display = (localProvider && !s.ollama_installed) ? "" : "none";
 }
 $("btnRecheck").onclick = refreshSetup;
 $("btnInstallBrowser").onclick = async () => {
   $("btnInstallBrowser").disabled = true;
   await window.pywebview.api.install_browser();
 };
+$("btnGetOllama").onclick = () => window.pywebview.api.open_url("https://ollama.com/download");
 $("provider").onchange = () => { syncProvider(); scheduleSave(); };
 $("telegramEnabled").onchange = () => { toggleTg(); scheduleSave(); };
 document.querySelectorAll("input, textarea, select").forEach(el => {

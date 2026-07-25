@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>HH Agent</title>
+<style>
+  :root {
+    --bg: #f5f5f7;
+    --panel: #ffffff;
+    --text: #1d1d1f;
+    --dim: #6e6e73;
+    --line: #d2d2d7;
+    --accent: #0071e3;
+    --ok: #1d8f4e;
+    --warn: #b25000;
+    --err: #c9252d;
+    --log-bg: #1e1e1e;
+    --log-text: #d4d4d4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1e; --panel: #2c2c2e; --text: #f5f5f7; --dim: #98989d;
+      --line: #3a3a3c; --accent: #0a84ff; --ok: #30d158; --warn: #ff9f0a;
+      --err: #ff453a; --log-bg: #000; --log-text: #d4d4d4;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .title { font-weight: 600; font-size: 14px; margin-right: auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .status { color: var(--dim); font-size: 12px; }
+  button {
+    font: inherit; padding: 6px 14px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger  { background: var(--err); border-color: var(--err); color: #fff; }
+  select, input, textarea {
+    font: inherit; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); width: 100%;
+  }
+  textarea { resize: vertical; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  nav { display: flex; gap: 2px; padding: 8px 14px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
+  nav button {
+    border: none; background: none; border-radius: 7px 7px 0 0; padding: 7px 13px;
+    color: var(--dim); border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 500; }
+
+  main { flex: 1; overflow: auto; padding: 18px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 11px; padding: 16px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  .card p.hint { margin: 0 0 12px; color: var(--dim); font-size: 12px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row > * { flex: 1; }
+  .row > button, .row > .fixed { flex: none; }
+  label { display: block; margin-bottom: 12px; }
+  label > span { display: block; margin-bottom: 5px; color: var(--dim); font-size: 12px; }
+  label.inline { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+  label.inline input { width: auto; }
+  label.inline span { margin: 0; color: var(--text); font-size: 13px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 9px; }
+  .stat { background: var(--bg); border-radius: 9px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 21px; font-weight: 600; }
+  .stat span { color: var(--dim); font-size: 11px; }
+  .stat.hl b { color: var(--ok); }
+
+  #log {
+    background: var(--log-bg); color: var(--log-text); border-radius: 9px; padding: 11px 13px;
+    height: 320px; overflow: auto; font: 11.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #log .warn { color: #ffb454; } #log .error { color: #ff6b6b; }
+  .pill { font-size: 11px; padding: 3px 9px; border-radius: 999px; background: var(--bg); color: var(--dim); }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--err); }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none;
+    align-items: center; justify-content: center; padding: 24px; z-index: 50;
+  }
+  .overlay.show { display: flex; }
+  .modal { background: var(--panel); border-radius: 13px; padding: 20px; max-width: 560px; width: 100%; }
+  .modal h3 { margin: 0 0 6px; font-size: 15px; }
+  .modal img { max-width: 100%; border-radius: 8px; border: 1px solid var(--line); margin: 12px 0; display: block; }
+  .progress { height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; margin-top: 9px; }
+  .progress i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .25s; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot"></span>
+  <span class="title">HH Agent</span>
+  <span class="status" id="status">Остановлен</span>
+  <select id="duration" class="fixed" style="width:150px">
+    <option value="15">15 минут</option>
+    <option value="30">30 минут</option>
+    <option value="60">1 час</option>
+    <option value="0" selected>Бессрочно</option>
+  </select>
+  <button class="primary fixed" id="btnStart">Запустить</button>
+  <button class="danger fixed" id="btnStop" disabled>Остановить</button>
+</header>
+
+<nav>
+  <button class="active" data-tab="run">Работа</button>
+  <button data-tab="resume">Резюме и поиск</button>
+  <button data-tab="filters">Фильтры</button>
+  <button data-tab="model">Модель</button>
+  <button data-tab="notify">Уведомления</button>
+</nav>
+
+<main>
+  <!-- Работа -->
+  <section class="tab active" id="tab-run">
+    <div class="card">
+      <h2>Статистика сеанса</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="card">
+      <h2>Журнал</h2>
+      <p class="hint">Здесь видно всё, что делает агент прямо сейчас.</p>
+      <div id="log"></div>
+    </div>
+  </section>
+
+  <!-- Резюме и поиск -->
+  <section class="tab" id="tab-resume">
+    <div class="card">
+      <h2>Резюме на hh.ru</h2>
+      <p class="hint">Название должно совпадать с заголовком резюме посимвольно — иначе агент не найдёт его в момент отклика.</p>
+      <label><span>Название резюме</span><input id="resumeName" placeholder="Тестировщик"></label>
+      <label><span>Профиль для сопроводительных писем</span>
+        <textarea id="resumeSummary" style="min-height:220px" placeholder="Опыт, стек, достижения…"></textarea></label>
+      <p class="hint">Модель пишет письма строго по этому тексту. Чем конкретнее — тем меньше выдумок.</p>
+    </div>
+    <div class="card">
+      <h2>Поисковые запросы</h2>
+      <p class="hint">По одному в строке. Короткие точнее: «Тестировщик» поймает и «Тестировщик ПО», и «Старший тестировщик».</p>
+      <textarea id="queries"></textarea>
+      <label class="inline" style="margin-top:12px">
+        <input type="checkbox" id="titleOnly">
+        <span>Искать только в названии вакансии</span>
+      </label>
+      <p class="hint">Без этого HH ищет слова и в описании — тогда в выдачу лезут посторонние вакансии.</p>
+    </div>
+  </section>
+
+  <!-- Фильтры -->
+  <section class="tab" id="tab-filters">
+    <div class="card">
+      <h2>Объём и темп</h2>
+      <div class="row">
+        <label><span>Страниц на запрос</span><input type="number" id="maxPages" min="1" max="10"></label>
+        <label><span>Пауза между кругами, мин</span><input type="number" id="pause" min="1" max="180"></label>
+      </div>
+      <p class="hint">Круг — полный проход по всем запросам. Больше страниц и меньше пауза — больше нагрузка на HH и выше риск блокировки.</p>
+    </div>
+    <div class="card">
+      <h2>Опыт работы</h2>
+      <p class="hint">Какие градации опыта запрашивать у HH.</p>
+      <label class="inline"><input type="checkbox" class="exp" value="noExperience"><span>Нет опыта</span></label>
+      <label class="inline"><input type="checkbox" class="exp" value="between1And3"><span>1–3 года</span></label>
+      <label class="inline"><input type="checkbox" class="exp" value="between3And6"><span>3–6 лет</span></label>
+      <label class="inline"><input type="checkbox" class="exp" value="moreThan6"><span>Более 6 лет</span></label>
+    </div>
+    <div class="card">
+      <h2>Регионы</h2>
+      <p class="hint">По строке на регион, в формате «Название | параметры». Например: <code>Москва | &amp;area=1</code></p>
+      <textarea id="regions" style="min-height:80px"></textarea>
+    </div>
+  </section>
+
+  <!-- Модель -->
+  <section class="tab" id="tab-model">
+    <div class="card">
+      <h2>Провайдер</h2>
+      <div class="row">
+        <select id="provider">
+          <option value="ollama">Локальная модель (Ollama)</option>
+          <option value="openai_compat">OpenAI-совместимый сервер</option>
+          <option value="anthropic">Anthropic по API-ключу</option>
+        </select>
+        <button class="fixed" id="btnCheck">Проверить</button>
+      </div>
+      <p class="hint" id="providerStatus" style="margin-top:10px">Нажмите «Проверить», чтобы убедиться, что модель отвечает.</p>
+    </div>
+
+    <div class="card" data-p="ollama">
+      <h2>Ollama</h2>
+      <label><span>Адрес сервера</span><input id="ollamaUrl" placeholder="http://localhost:11434"></label>
+      <label><span>Модель</span>
+        <div class="row">
+          <select id="ollamaModel"></select>
+          <button class="fixed" id="btnRefresh">Обновить список</button>
+        </div>
+      </label>
+      <h2 style="margin-top:16px">Скачать модель</h2>
+      <p class="hint">Можно обычное имя (<code>gemma4:e4b-it-qat</code>) или ссылку на GGUF с HuggingFace (<code>hf.co/автор/репозиторий:квант</code>).</p>
+      <div class="row">
+        <input id="pullName" placeholder="gemma4:e4b-it-qat">
+        <button class="fixed" id="btnPull">Скачать</button>
+      </div>
+      <div id="pullBox" style="display:none">
+        <p class="hint" id="pullStatus" style="margin:9px 0 0"></p>
+        <div class="progress"><i id="pullBar"></i></div>
+      </div>
+    </div>
+
+    <div class="card" data-p="openai_compat" style="display:none">
+      <h2>OpenAI-совместимый сервер</h2>
+      <p class="hint">Подходит для LM Studio, llama.cpp server, LocalAI, Groq.</p>
+      <label><span>Базовый адрес</span><input id="openaiUrl" placeholder="http://localhost:1234/v1"></label>
+      <label><span>Модель</span><input id="openaiModel" placeholder="имя модели на сервере"></label>
+      <label><span>API-ключ (если нужен)</span><input id="openaiKey" type="password" placeholder="оставьте пустым, чтобы не менять"></label>
+    </div>
+
+    <div class="card" data-p="anthropic" style="display:none">
+      <h2>Anthropic</h2>
+      <label><span>Модель</span><input id="anthropicModel" placeholder="claude-sonnet-5"></label>
+      <label><span>API-ключ</span><input id="anthropicKey" type="password" placeholder="оставьте пустым, чтобы не менять"></label>
+      <p class="hint">Ключ хранится в Keychain, а не в файле настроек.</p>
+    </div>
+  </section>
+
+  <!-- Уведомления -->
+  <section class="tab" id="tab-notify">
+    <div class="card">
+      <h2>Куда сообщать</h2>
+      <label class="inline"><input type="checkbox" id="desktopEnabled"><span>Уведомления на рабочем столе</span></label>
+      <p class="hint">Работают только в собранном приложении: macOS не показывает уведомления от неподписанных программ.</p>
+      <label class="inline" style="margin-top:12px"><input type="checkbox" id="telegramEnabled"><span>Дублировать в Telegram</span></label>
+      <div id="tgFields" style="margin-top:10px">
+        <label><span>Ваш Telegram ID</span><input id="tgUserId" placeholder="узнать у @userinfobot"></label>
+        <label><span>Токен бота</span><input id="tgToken" type="password" placeholder="оставьте пустым, чтобы не менять"></label>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Файл настроек</h2>
+      <p class="hint" id="settingsPath"></p>
+      <button id="btnOpenFolder">Показать в Finder</button>
+    </div>
+  </section>
+</main>
+
+<!-- Капча -->
+<div class="overlay" id="captchaBox">
+  <div class="modal">
+    <h3>Нужна помощь: капча</h3>
+    <p class="hint" id="captchaPrompt" style="color:var(--dim)"></p>
+    <img id="captchaImg" alt="Скриншот страницы с капчей">
+    <input id="captchaInput" placeholder="Введите текст с картинки" autofocus>
+    <div class="row" style="margin-top:12px; justify-content:flex-end">
+      <button class="fixed" id="captchaSkip">Пропустить вакансию</button>
+      <button class="primary fixed" id="captchaSend">Отправить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let saveTimer = null;
+
+const STAT_LABELS = [
+  ["viewed", "Просмотрено", false], ["hard_skipped", "Отсеяно по названию", false],
+  ["ai_pass", "Прошли ИИ", false], ["ai_reject", "Отклонил ИИ", false],
+  ["letters", "Писем", false], ["applied", "Откликов", true],
+  ["already", "Уже был отклик", false], ["skipped_page", "Не открылось", false],
+  ["apply_failed", "Не удалось", false],
+];
+
+function renderStats(s) {
+  $("stats").innerHTML = STAT_LABELS.map(([k, label, hl]) =>
+    `<div class="stat${hl ? " hl" : ""}"><b>${s?.[k] ?? 0}</b><span>${label}</span></div>`).join("");
+}
+
+function addLog(line, level) {
+  const box = $("log");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const el = document.createElement("div");
+  if (level && level !== "info") el.className = level;
+  el.textContent = line;
+  box.appendChild(el);
+  while (box.childNodes.length > 800) box.removeChild(box.firstChild);
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function setRunning(on) {
+  $("dot").classList.toggle("on", on);
+  $("status").textContent = on ? "Работает" : "Остановлен";
+  $("btnStart").disabled = on;
+  $("btnStop").disabled = !on;
+  $("duration").disabled = on;
+}
+
+// События из Python
+window.onAgentEvent = (event, data) => {
+  if (event === "log") addLog(data.line, data.level);
+  else if (event === "state") setRunning(data.running);
+  else if (event === "stats") renderStats(data);
+  else if (event === "captcha") {
+    $("captchaPrompt").textContent = data.prompt || "";
+    $("captchaImg").src = data.image || "";
+    $("captchaInput").value = "";
+    $("captchaBox").classList.add("show");
+    setTimeout(() => $("captchaInput").focus(), 60);
+  }
+  else if (event === "captcha_close") $("captchaBox").classList.remove("show");
+  else if (event === "pull_progress") {
+    $("pullBox").style.display = "block";
+    $("pullStatus").textContent = data.status + (data.percent ? ` — ${data.percent}%` : "");
+    $("pullBar").style.width = data.percent + "%";
+  }
+  else if (event === "pull_done") {
+    $("pullStatus").textContent = data.ok ? "Готово: " + data.model : "Ошибка: " + data.error;
+    if (data.ok) { $("pullBar").style.width = "100%"; refreshModels(); }
+  }
+};
+
+// Вкладки
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  $("tab-" + b.dataset.tab).classList.add("active");
+});
+
+// Настройки
+async function loadSettings() {
+  const s = await window.pywebview.api.get_settings();
+  $("resumeName").value = s.resume.target_name || "";
+  $("resumeSummary").value = s.resume.summary || "";
+  $("queries").value = (s.search.queries || []).join("\n");
+  $("titleOnly").checked = !!s.search.title_only;
+  $("maxPages").value = s.search.max_pages_per_query;
+  $("pause").value = s.schedule.cycle_pause_minutes;
+  $("regions").value = (s.search.regions || []).map(r => `${r.name} | ${r.params}`).join("\n");
+  document.querySelectorAll(".exp").forEach(c => c.checked = (s.search.experience || []).includes(c.value));
+
+  $("provider").value = s.llm.provider;
+  $("ollamaUrl").value = s.llm.ollama_url;
+  $("openaiUrl").value = s.llm.openai_base_url;
+  $("openaiModel").value = s.llm.openai_model || "";
+  $("anthropicModel").value = s.llm.anthropic_model || "";
+  $("desktopEnabled").checked = !!s.notifications.desktop_enabled;
+  $("telegramEnabled").checked = !!s.notifications.telegram_enabled;
+  $("tgUserId").value = s.notifications.tg_user_id || "";
+  if (s._secrets.tg_bot_token) $("tgToken").placeholder = "сохранён — оставьте пустым";
+  if (s._secrets.anthropic_api_key) $("anthropicKey").placeholder = "сохранён — оставьте пустым";
+  if (s._secrets.openai_api_key) $("openaiKey").placeholder = "сохранён — оставьте пустым";
+
+  syncProvider();
+  toggleTg();
+  await refreshModels(s.llm.ollama_model);
+}
+
+function collect() {
+  const regions = $("regions").value.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const [name, params] = l.split("|").map(x => (x || "").trim());
+    return { name: name || "Регион", params: params || "" };
+  });
+  const payload = {
+    resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
+    search: {
+      queries: $("queries").value.split("\n").map(q => q.trim()).filter(Boolean),
+      title_only: $("titleOnly").checked,
+      max_pages_per_query: +$("maxPages").value || 2,
+      regions,
+      experience: [...document.querySelectorAll(".exp:checked")].map(c => c.value),
+    },
+    schedule: { cycle_pause_minutes: +$("pause").value || 10 },
+    llm: {
+      provider: $("provider").value,
+      ollama_url: $("ollamaUrl").value.trim(),
+      ollama_model: $("ollamaModel").value,
+      openai_base_url: $("openaiUrl").value.trim(),
+      openai_model: $("openaiModel").value.trim(),
+      anthropic_model: $("anthropicModel").value.trim(),
+    },
+    notifications: {
+      desktop_enabled: $("desktopEnabled").checked,
+      telegram_enabled: $("telegramEnabled").checked,
+      tg_user_id: $("tgUserId").value.trim(),
+    },
+    _secrets: {
+      tg_bot_token: $("tgToken").value.trim(),
+      anthropic_api_key: $("anthropicKey").value.trim(),
+      openai_api_key: $("openaiKey").value.trim(),
+    },
+  };
+  return payload;
+}
+
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    const r = await window.pywebview.api.save_settings(collect());
+    if (r.ok) $("settingsPath").textContent = r.path;
+  }, 600);
+}
+
+function syncProvider() {
+  const p = $("provider").value;
+  document.querySelectorAll("[data-p]").forEach(el => el.style.display = el.dataset.p === p ? "" : "none");
+}
+function toggleTg() { $("tgFields").style.display = $("telegramEnabled").checked ? "" : "none"; }
+
+async function refreshModels(selected) {
+  const sel = $("ollamaModel");
+  const want = selected || sel.value;
+  const r = await window.pywebview.api.list_models();
+  sel.innerHTML = (r.models || []).map(m => `<option${m === want ? " selected" : ""}>${m}</option>`).join("")
+    || `<option value="${want || ""}">${want || "модели не найдены"}</option>`;
+}
+
+// Обработчики
+$("btnStart").onclick = async () => {
+  await window.pywebview.api.save_settings(collect());
+  const r = await window.pywebview.api.start_agent(+$("duration").value);
+  if (!r.ok) addLog("Не удалось запустить: " + r.error, "error");
+};
+$("btnStop").onclick = () => window.pywebview.api.stop_agent();
+$("btnCheck").onclick = async () => {
+  $("providerStatus").textContent = "Проверяю…";
+  await window.pywebview.api.save_settings(collect());
+  const r = await window.pywebview.api.check_provider();
+  $("providerStatus").innerHTML = `<span class="pill ${r.ok ? "ok" : "bad"}">${r.ok ? "OK" : "Проблема"}</span> ${r.message}`;
+};
+$("btnRefresh").onclick = () => refreshModels();
+$("btnPull").onclick = async () => {
+  const name = $("pullName").value.trim();
+  if (!name) return;
+  $("pullBox").style.display = "block";
+  $("pullStatus").textContent = "Начинаю загрузку…";
+  $("pullBar").style.width = "0";
+  await window.pywebview.api.pull_model(name);
+};
+$("btnOpenFolder").onclick = () => window.pywebview.api.open_settings_folder();
+$("provider").onchange = () => { syncProvider(); scheduleSave(); };
+$("telegramEnabled").onchange = () => { toggleTg(); scheduleSave(); };
+document.querySelectorAll("input, textarea, select").forEach(el => {
+  if (["captchaInput", "pullName", "duration"].includes(el.id)) return;
+  el.addEventListener("change", scheduleSave);
+  if (el.tagName === "TEXTAREA" || el.type === "text" || el.type === "password" || el.type === "number")
+    el.addEventListener("input", scheduleSave);
+});
+
+const sendCaptcha = text => {
+  $("captchaBox").classList.remove("show");
+  window.pywebview.api.submit_captcha(text);
+};
+$("captchaSend").onclick = () => sendCaptcha($("captchaInput").value.trim());
+$("captchaSkip").onclick = () => sendCaptcha("");
+$("captchaInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") sendCaptcha($("captchaInput").value.trim());
+});
+
+window.addEventListener("pywebviewready", async () => {
+  renderStats(null);
+  await loadSettings();
+  const st = await window.pywebview.api.get_state();
+  setRunning(st.running);
+  renderStats(st.stats);
+  addLog("Готов к работе. Проверьте настройки и нажмите «Запустить».");
+});
+</script>
+</body>
+</html>

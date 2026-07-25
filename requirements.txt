@@ -6,3 +6,4 @@ aiohttp
 playwright-stealth
 keyring
 desktop-notifier
+pywebview

@@ -565,6 +565,15 @@ $("captchaInput").addEventListener("keydown", e => {
   if (e.key === "Enter") sendCaptcha($("captchaInput").value.trim());
 });
 
+// Режим предпросмотра для дизайнера: открыть index.html?mock=1 в браузере.
+// Требуется явный параметр в адресе — приложение его никогда не добавляет,
+// поэтому заглушка не может подменить настоящий API.
+if (location.search.includes("mock")) {
+  const s = document.createElement("script");
+  s.src = "mock.js";
+  document.head.appendChild(s);
+}
+
 window.addEventListener("pywebviewready", async () => {
   renderStats(null);
   await loadSettings();

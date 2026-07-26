@@ -45,7 +45,8 @@
   const stats = { viewed: 40, hard_skipped: 28, ai_pass: 7, ai_reject: 5,
                   letters: 7, applied: 5, already: 2, skipped_page: 1, apply_failed: 0 };
 
-  // Настоящие строки журнала — включая длинные названия вакансий
+  // Настоящие строки журнала — включая длинные названия вакансий и паузу
+  // ~12 с на письме (после "Вакансия подходит" перед "Отклик отправлен")
   const LOG = [
     ["🔍 Поиск по запросу: Тестировщик", "info"],
     ["📍 Режим: Москва (любой график)", "info"],
@@ -54,6 +55,7 @@
     ["⏩ Пропускаем (Неподходящий грейд/профессия — '1с'): QA Engineer 1C / Тестировщик 1С", "info"],
     ["👁️ Открываем вакансию: Специалист по тестированию", "info"],
     ["✨ Вакансия подходит: Специалист по тестированию", "info"],
+    ["✍️ Пишу сопроводительное — Специалист по тестированию", "info"],
     ["✅ Отклик отправлен: Специалист по тестированию", "info"],
     ["❌ ИИ отклонил: Инженер по нагрузочному тестированию (Performance QA)", "info"],
     ["🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...", "warn"],
@@ -64,15 +66,26 @@
 
   const ok = (extra) => Promise.resolve(Object.assign({ ok: true }, extra || {}));
 
+  // ?mock=notready показывает экран первого запуска (ничего не настроено)
+  const notReady = /notready/.test(location.search);
+  const setup = notReady
+    ? { browser: true, ollama_installed: true, ollama_running: true, logged_in: false, resume: false, summary: false }
+    : { browser: true, ollama_installed: true, ollama_running: true, logged_in: true, resume: true, summary: true };
+
+  const models = [
+    { name: "gemma4:e4b-it-qat", size_gb: 3.1, in_use: true },
+    { name: "gemma4:12b-it-qat", size_gb: 7.6, in_use: false },
+  ];
+
   window.pywebview = {
     api: {
       get_settings: () => Promise.resolve(JSON.parse(JSON.stringify(settings))),
       save_settings: () => ok({ path: "~/Library/Application Support/HHAgent/settings.json" }),
-      get_state: () => Promise.resolve({ running: false, stats }),
-      setup_status: () => Promise.resolve({
-        browser: true, ollama_installed: true, ollama_running: true,
-        logged_in: true, resume: true, summary: true }),
-      list_models: () => ok({ models: ["gemma4:12b-it-qat", "gemma4:e4b-it-qat"] }),
+      get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
+      setup_status: () => Promise.resolve(setup),
+      list_models: () => ok({ models: models.map(m => m.name) }),
+      list_models_detail: () => ok({ models }),
+      delete_model: (name) => { const i = models.findIndex(m => m.name === name); if (i >= 0) models.splice(i, 1); return ok(); },
       check_provider: () => ok({ message: "Ollama готова, модель gemma4:e4b-it-qat" }),
       test_notification: () => ok({ message: "Рабочий стол — ОК; Telegram — ОК" }),
       start_agent: () => { demo(); return ok(); },
@@ -82,19 +95,20 @@
       install_browser: () => ok(),
       open_settings_folder: () => ok(),
       open_url: () => ok(),
+      open_ollama_app: () => ok(),
     },
   };
 
   // Демонстрация работающего агента: журнал наполняется по одной строке
   function demo() {
-    window.onAgentEvent("state", { running: true });
+    window.onAgentEvent("state", { running: true, started_at: Date.now() / 1000 - 30 });
     let i = 0;
     const t = setInterval(() => {
       if (i >= LOG.length) { clearInterval(t); return; }
       const [line, level] = LOG[i++];
       window.onAgentEvent("log", { line, level });
       window.onAgentEvent("stats", stats);
-    }, 700);
+    }, 900);
   }
 
   function pullDemo() {
@@ -119,6 +133,14 @@
     });
   };
 
-  window.dispatchEvent(new Event("pywebviewready"));
+  // Важно: ждём полной загрузки страницы. mock.js подключается синхронно через
+  // document.write ДО icons.js/app.js — setTimeout(0) тут не гарантия: скрипты
+  // после него ещё грузятся по сети и могут выполниться позже таймера. window
+  // "load" наступает только когда ВСЕ синхронные скрипты уже отработали и
+  // app.js точно успел повесить свой addEventListener — иначе событие уходит
+  // в пустоту и экран остаётся на статичной заглушке из разметки.
+  const fire = () => window.dispatchEvent(new Event("pywebviewready"));
+  if (document.readyState === "complete") fire();
+  else window.addEventListener("load", fire);
   console.info("Режим предпросмотра для дизайнера. showCaptchaDemo() — окно капчи.");
 })();

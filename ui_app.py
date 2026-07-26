@@ -80,6 +80,7 @@ class AgentBridge:
         self.client = None
         self.agent_task = None
         self.running = False
+        self.started_at = None
         self._captcha_future = None
         self._stdout_backup = None
 
@@ -170,6 +171,22 @@ class AgentBridge:
             return {"ok": True, "models": fut.result(timeout=30)}
         except Exception as e:
             return {"ok": False, "models": [], "error": str(e)}
+
+    def list_models_detail(self):
+        from llm_providers import OllamaProvider
+        try:
+            fut = self._submit(OllamaProvider().list_models_detail())
+            return {"ok": True, "models": fut.result(timeout=30)}
+        except Exception as e:
+            return {"ok": False, "models": [], "error": str(e)}
+
+    def delete_model(self, name: str):
+        from llm_providers import OllamaProvider
+        try:
+            self._submit(OllamaProvider().delete_model(name)).result(timeout=30)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def pull_model(self, name: str):
         """Скачивает модель, показывая прогресс в интерфейсе."""
@@ -268,6 +285,9 @@ class AgentBridge:
                     return
 
                 control.arm()
+                import time as _time
+                self.started_at = _time.time()
+                self._emit("state", {"running": True, "started_at": self.started_at})
                 await sinks.notify("🤖 Агент запущен. " + control.duration_text())
 
                 while not control.should_stop():
@@ -299,6 +319,7 @@ class AgentBridge:
                         pass
                 self.running = False
                 self.client = None
+                self.started_at = None
                 self._emit("state", {"running": False})
 
         self.agent_task = self._submit(run())
@@ -314,7 +335,7 @@ class AgentBridge:
 
     def get_state(self):
         stats = self.client.stats.__dict__ if self.client else Stats().__dict__
-        return {"running": self.running, "stats": stats}
+        return {"running": self.running, "stats": stats, "started_at": self.started_at}
 
     # ---------- прочее ----------
 
@@ -391,6 +412,17 @@ class AgentBridge:
         try:
             import webbrowser
             webbrowser.open(url)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def open_ollama_app(self):
+        """Открывает приложение Ollama — используется в баннере «модель не отвечает»."""
+        try:
+            if sys.platform == "darwin":
+                os.system('open -a Ollama')
+            else:
+                return {"ok": False, "error": "доступно только на macOS"}
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}

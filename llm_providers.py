@@ -92,6 +92,28 @@ class OllamaProvider(LLMProvider):
                 data = await r.json()
                 return [m["name"] for m in data.get("models", [])]
 
+    async def list_models_detail(self) -> list[dict]:
+        """Список с размерами и отметкой текущей модели — для экрана «Модель»."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.base_url}/api/tags", timeout=10) as r:
+                r.raise_for_status()
+                data = await r.json()
+        return [
+            {
+                "name": m["name"],
+                "size_gb": round(m.get("size", 0) / 1_000_000_000, 1),
+                "in_use": m["name"] == self.model,
+            }
+            for m in data.get("models", [])
+        ]
+
+    async def delete_model(self, name: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.delete(f"{self.base_url}/api/delete",
+                                      json={"model": name}, timeout=15) as r:
+                if r.status >= 400:
+                    raise ProviderError(f"Не удалось удалить: HTTP {r.status}")
+
     async def pull_model(self, name: str, on_progress=None):
         """Скачивает модель. Принимает и обычные имена (gemma4:e4b-it-qat),
         и ссылки на GGUF с HuggingFace (hf.co/user/repo:quant).

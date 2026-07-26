@@ -13,3 +13,6 @@ build/
 dist/
 build_assets/
 *.spec.bak
+.DS_Store
+# исходники дизайнера (референс для редизайна, не часть приложения)
+maket/

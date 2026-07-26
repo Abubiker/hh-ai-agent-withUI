@@ -358,6 +358,9 @@ class HHClient:
                                 self.stats.ai_pass += 1
                                 print(f"✨ Вакансия подходит: {title}")
 
+                                # Письмо пишется ~12 секунд — без этой строки в логе
+                                # было полное затишье, интерфейсу нечем показать прогресс.
+                                print(f"✍️ Пишу сопроводительное — {title}")
                                 cover_letter = await generate_cover_letter(title, description)
                                 self.stats.letters += 1
 

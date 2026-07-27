@@ -73,6 +73,27 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---------- выделение текста ----------
+   Окно запускается с text_select=True, иначе pywebview запрещает выделение
+   на всей странице и журнал нельзя скопировать. Здесь отключаем выделение
+   там, где оно только мешает (кнопки, меню, подписи), и явно разрешаем в
+   тексте — журнал, поля, сообщения об ошибках. */
+.titlebar, .sidebar, .nav-item, .btn, .seg, .provider-seg, .switch,
+.chip-add, .check-line, .step, .now-chip, .funnel-row .label,
+.card-title, .page-head, .model-row .use, .model-row .del, .sched-chip {
+  -webkit-user-select: none; user-select: none;
+}
+
+#log, .log-line, .log-line .text, .log-line .time,
+input, textarea, .mono, .banner .desc, .modal .desc,
+.card .hint, .region-card .text, .area-hit {
+  -webkit-user-select: text; user-select: text;
+}
+
+/* курсор подсказывает, что текст можно выделить */
+#log, .log-line { cursor: text; }
+::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
 #app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
 /* ---------- заголовок ---------- */
@@ -258,10 +279,15 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 /* ---------- журнал ---------- */
 
 .log-card { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 13px; }
-.log-toolbar { display: flex; align-items: center; gap: 10px; }
-.log-toolbar .live { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); }
+.log-toolbar { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.log-toolbar .live { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); flex: none; white-space: nowrap; }
 .log-toolbar .live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); animation: pulse 2s ease-in-out infinite; }
-.log-toolbar .count { font-size: 11.5px; color: var(--faint); }
+/* Счётчик — второстепенный: не переносится и первым уходит, когда узко,
+   иначе он сжимался в столбик и раздувал высоту тулбара. */
+.log-toolbar .count { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; }
+.log-toolbar .card-title, .log-toolbar .btn { flex: none; white-space: nowrap; }
+.log-toolbar .seg { flex: none; }
+@media (max-width: 1150px) { .log-toolbar .count { display: none; } }
 
 .seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--radius-control); background: var(--surf2); }
 .seg button {
@@ -277,9 +303,15 @@ header.titlebar > * { -webkit-app-region: no-drag; }
   border: 1px solid var(--line2); padding: 12px 14px; overflow: auto;
   display: flex; flex-direction: column; gap: 6px;
 }
-.log-line { display: flex; gap: 10px; align-items: flex-start; }
-.log-line .time { width: 44px; flex: none; font: 400 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint); }
-.log-line .icon { flex: none; margin-top: 2px; }
+/* Время и иконка — строчные внутри .text, иначе выделение мышью рвёт строку
+   на «время \n сообщение». Висячий отступ делает пара padding-left/text-indent:
+   первая строка уезжает влево под время, перенос выравнивается по тексту. */
+.log-line .text { padding-left: 68px; text-indent: -68px; }
+.log-line .time {
+  display: inline-block; width: 44px; text-indent: 0;
+  font: 400 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
+}
+.log-line .icon { display: inline-block; width: 13px; text-indent: 0; vertical-align: -2px; margin-right: 7px; }
 .log-line .icon.ok { color: var(--ok); }
 .log-line .icon.warn { color: var(--warn); }
 .log-line .icon.err { color: var(--err); }

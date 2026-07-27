@@ -745,7 +745,15 @@ function renderLogAppend(entry) {
   div.className = "log-line" + (cls ? " " + cls : "") + (passesFilter(entry) ? "" : " hidden-by-filter");
   div.dataset.important = entry.important ? "1" : "0";
   div.dataset.level = entry.level;
-  div.innerHTML = `<div class="time">${entry.time}</div><span class="icon ${entry.level === "error" ? "err" : entry.level === "warn" ? "warn" : cls === "important" ? "ok" : "dim"}">${ICON[icon]}</span><div class="text">${esc(entry.text)}</div>`;
+  // Время и иконка ЛЕЖАТ ВНУТРИ .text как строчные элементы: если они блочные,
+  // при выделении мышью браузер вставляет перенос и копия выглядит как
+  // «12:07 \n сообщение». Висячий отступ для переносов даёт CSS (text-indent).
+  const iconCls = entry.level === "error" ? "err"
+    : entry.level === "warn" ? "warn" : cls === "important" ? "ok" : "dim";
+  // Пробел перед текстом нужен именно в разметке: иначе при копировании
+  // время слипается с сообщением («12:09Готов к работе»).
+  div.innerHTML = `<div class="text"><span class="time">${entry.time}</span>` +
+    `<span class="icon ${iconCls}">${ICON[icon]}</span> ${esc(entry.text)}</div>`;
   box.appendChild(div);
   while (box.children.length > 800) box.removeChild(box.firstChild);
   if (atBottom) box.scrollTop = box.scrollHeight;

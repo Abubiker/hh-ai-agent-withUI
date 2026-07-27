@@ -52,6 +52,15 @@ async function loadSettings() {
   $("openaiUrl").value = s.llm.openai_base_url;
   $("openaiModel").value = s.llm.openai_model || "";
   $("anthropicModel").value = s.llm.anthropic_model || "";
+  // Пресет сервиса подсвечиваем, если адрес совпал с известным
+  $("openaiPreset").value =
+    [...$("openaiPreset").options].some(o => o.value === s.llm.openai_base_url)
+      ? s.llm.openai_base_url : "";
+  // Модель Anthropic: известная — выбираем в списке, иначе режим ручного ввода
+  const known = [...$("anthropicPreset").options].map(o => o.value).filter(Boolean);
+  const isKnown = known.includes(s.llm.anthropic_model);
+  $("anthropicPreset").value = isKnown ? s.llm.anthropic_model : "";
+  $("anthropicManualWrap").style.display = isKnown ? "none" : "";
   if (s._secrets.tg_bot_token) $("tgToken").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.anthropic_api_key) $("anthropicKey").placeholder = "сохранён — оставьте пустым";
   if (s._secrets.openai_api_key) $("openaiKey").placeholder = "сохранён — оставьте пустым";
@@ -385,7 +394,13 @@ function updateRegionsCount() {
 
 function syncProviderFields() {
   const p = document.querySelector("#providerSeg button.active").dataset.p;
-  document.querySelectorAll("[data-p]").forEach(el => el.style.display = el.dataset.p === p ? "" : "none");
+  // ВАЖНО: только блоки настроек. Кнопки самого переключателя тоже имеют
+  // data-p, и общий селектор скрывал их — выбрав облачного провайдера,
+  // вернуться к Ollama было нельзя.
+  document.querySelectorAll(".card [data-p], .card[data-p]").forEach(el => {
+    if (el.closest("#providerSeg")) return;
+    el.style.display = el.dataset.p === p ? "" : "none";
+  });
   $("ollamaExtras").style.display = p === "ollama" ? "" : "none";
   $("providerStatusPill").style.display = "none";
   $("providerStatusMsg").textContent = "";
@@ -470,6 +485,59 @@ $("btnCheck").onclick = async () => {
   refreshSetup();
 };
 $("btnRefresh").onclick = () => refreshModels();
+
+/* ---------- выбор модели у облачных провайдеров ---------- */
+
+// OpenAI-совместимые сервисы: пресет заполняет базовый адрес
+$("openaiPreset").onchange = () => {
+  const url = $("openaiPreset").value;
+  if (url) { $("openaiUrl").value = url; scheduleSave(); }
+};
+
+let openaiModels = [];   // полный список с последней загрузки
+
+$("btnLoadOpenaiModels").onclick = async () => {
+  const btn = $("btnLoadOpenaiModels");
+  btn.disabled = true; btn.textContent = "Загружаю…";
+  // Сначала сохраняем: провайдер на стороне Python читает адрес и ключ из настроек
+  await api().save_settings(collect());
+  const r = await api().list_models();
+  btn.disabled = false; btn.textContent = "Загрузить список";
+  if (!r.ok || !r.models.length) {
+    $("openaiModelCount").textContent = r.error ? "не удалось получить список" : "список пуст";
+    return;
+  }
+  openaiModels = r.models;
+  $("openaiModelFilter").style.display = "";
+  $("openaiModelSelect").style.display = "";
+  renderOpenaiModels();
+};
+
+function renderOpenaiModels() {
+  const q = $("openaiModelFilter").value.trim().toLowerCase();
+  const hits = q ? openaiModels.filter(m => m.toLowerCase().includes(q)) : openaiModels;
+  const cur = $("openaiModel").value;
+  $("openaiModelSelect").innerHTML = hits.slice(0, 300)
+    .map(m => `<option${m === cur ? " selected" : ""}>${esc(m)}</option>`).join("");
+  $("openaiModelCount").textContent = q
+    ? `${hits.length} из ${openaiModels.length}`
+    : `${openaiModels.length} моделей`;
+}
+
+$("openaiModelFilter").addEventListener("input", renderOpenaiModels);
+$("openaiModelSelect").addEventListener("change", () => {
+  $("openaiModel").value = $("openaiModelSelect").value;
+  scheduleSave();
+  updateSidebarFooter();
+});
+
+// Anthropic: список известных моделей + возможность ввести своё имя
+$("anthropicPreset").onchange = () => {
+  const v = $("anthropicPreset").value;
+  $("anthropicManualWrap").style.display = v ? "none" : "";
+  if (v) { $("anthropicModel").value = v; scheduleSave(); updateSidebarFooter(); }
+  else $("anthropicModel").focus();
+};
 $("btnPull").onclick = async () => {
   const name = $("pullName").value.trim(); if (!name) return;
   $("pullBox").style.display = "flex";
@@ -508,7 +576,8 @@ stepperWire("pause", { min: 5, max: 120, step: 5, fmt: v => v + " мин" });
 // правки резюме, адресов и выбор модели в селекте молча терялись.
 document.querySelectorAll("input, textarea, select").forEach(el => {
   if (["captchaInput", "pullName", "newQueryInput", "areaSearch",
-       "manualName", "manualParams"].includes(el.id)) return;
+       "manualName", "manualParams", "openaiModelFilter",
+       "openaiModelSelect", "openaiPreset", "anthropicPreset"].includes(el.id)) return;
   el.addEventListener("change", scheduleSave);
   if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
     el.addEventListener("input", scheduleSave);
@@ -713,6 +782,16 @@ $("logFilter").addEventListener("click", e => {
 });
 $("logShowAll").onclick = () => { state.filter = "all"; $("logFilter").querySelectorAll("button").forEach(x => x.classList.toggle("active", x.dataset.f === "all")); reflowLogFilter(); };
 
+$("btnCopyLog").onclick = async () => {
+  // Копируем то, что сейчас показано фильтром — с временем, как в журнале
+  const lines = state.logs.filter(passesFilter).map(e => `${e.time}  ${e.text}`);
+  if (!lines.length) return;
+  const btn = $("btnCopyLog");
+  const r = await api().copy_to_clipboard(lines.join("\n"));
+  btn.textContent = r && r.ok ? `Скопировано (${lines.length})` : "Не удалось";
+  setTimeout(() => { btn.textContent = "Скопировать"; }, 2000);
+};
+
 /* ================= «Сейчас делаю» — выводим из текста журнала ================= */
 
 function updateNowFromLog(text) {
@@ -788,7 +867,13 @@ function setRunningUi(running, startedAt) {
   state.running = running;
   if (startedAt) state.startedAt = startedAt * 1000;
   $("btnStart").style.display = running ? "none" : "";
-  $("btnStop").style.display = running ? "" : "none";
+  const stopBtn = $("btnStop");
+  stopBtn.style.display = running ? "" : "none";
+  if (running) {  // сброс после предыдущей остановки
+    stopBtn.disabled = false;
+    stopBtn.innerHTML = `<i data-icon="stop11"></i> Остановить`;
+    paintIcons(stopBtn);
+  }
   $("duration").disabled = running;
   $("sessionLive").style.display = running ? "flex" : "none";
   $("logLiveTag").style.display = running ? "flex" : "none";
@@ -820,7 +905,15 @@ $("btnStart").onclick = async () => {
     showErrorBanner("Ошибка при запуске", e && e.message ? e.message : String(e));
   }
 };
-$("btnStop").onclick = () => api().stop_agent();
+$("btnStop").onclick = () => {
+  // Блокируем сразу: раньше при отсутствии мгновенной реакции пользователь
+  // жал несколько раз, и лог засорялся повторными «Останавливаюсь…».
+  const b = $("btnStop");
+  b.disabled = true;
+  b.innerHTML = `<i data-icon="stop11"></i> Останавливаюсь…`;
+  paintIcons(b);
+  api().stop_agent();
+};
 $("btnRecheck").onclick = () => refreshSetup();
 
 /* ================= баннер ошибки ================= */

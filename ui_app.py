@@ -425,6 +425,22 @@ class AgentBridge:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def copy_to_clipboard(self, text: str):
+        """Копирование через системную утилиту: navigator.clipboard в WKWebView
+        требует защищённого контекста и на file:// не работает."""
+        import subprocess
+        try:
+            if sys.platform == "darwin":
+                cmd = ["pbcopy"]
+            elif os.name == "nt":
+                cmd = ["clip"]
+            else:
+                cmd = ["xclip", "-selection", "clipboard"]
+            subprocess.run(cmd, input=(text or "").encode("utf-8"), check=True)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def get_areas(self):
         """Справочник регионов hh.ru для модалки выбора. При недоступном API
         (не-РФ сеть отдаёт 403) интерфейс переключается на ручной ввод."""

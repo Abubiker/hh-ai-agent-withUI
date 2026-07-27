@@ -123,6 +123,7 @@
                 <div class="live" id="logLiveTag" style="display:none"><span class="dot"></span>живой</div>
                 <div class="count" id="logCount"></div>
                 <div class="spacer"></div>
+                <button class="btn btn-small" id="btnCopyLog" title="Скопировать показанные строки">Скопировать</button>
                 <div class="seg" id="logFilter">
                   <button class="active" data-f="all">Всё</button>
                   <button data-f="important">Важное</button>
@@ -252,14 +253,45 @@
               <div class="col" style="width:120px;flex:none"><span class="field-label" style="color:transparent">·</span>
                 <button class="btn" id="btnRefresh" style="height:34px"><i data-icon="refresh12"></i> Обновить</button></div>
             </div>
-            <div data-p="openai_compat" class="row" style="display:none">
-              <label class="field" style="flex:1"><span class="field-label">Базовый адрес</span><input type="text" id="openaiUrl" class="mono"></label>
-              <label class="field" style="flex:1"><span class="field-label">Модель</span><input type="text" id="openaiModel"></label>
-              <label class="field" style="flex:1"><span class="field-label">API-ключ</span><input type="password" id="openaiKey" placeholder="оставьте пустым — не изменится"></label>
+            <div data-p="openai_compat" class="provider-block" style="display:none">
+              <div class="row">
+                <label class="field" style="flex:1"><span class="field-label">Сервис</span>
+                  <select class="plain" id="openaiPreset">
+                    <option value="">Свой адрес</option>
+                    <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+                    <option value="https://api.groq.com/openai/v1">Groq</option>
+                    <option value="http://localhost:1234/v1">LM Studio</option>
+                    <option value="https://api.openai.com/v1">OpenAI</option>
+                  </select>
+                </label>
+                <label class="field" style="flex:2"><span class="field-label">Базовый адрес</span><input type="text" id="openaiUrl" class="mono"></label>
+                <label class="field" style="flex:1"><span class="field-label">API-ключ</span><input type="password" id="openaiKey" placeholder="оставьте пустым — не изменится"></label>
+              </div>
+              <div class="col" style="gap:7px">
+                <div class="field-label">Модель<span class="spacer" style="flex:1"></span><span class="counter" id="openaiModelCount"></span></div>
+                <div class="row tight">
+                  <input type="text" id="openaiModel" class="mono" placeholder="например: deepseek/deepseek-r1:free" style="flex:1">
+                  <button class="btn" id="btnLoadOpenaiModels" style="height:34px;flex:none">Загрузить список</button>
+                </div>
+                <input type="text" id="openaiModelFilter" placeholder="Фильтр по списку: free, llama, gpt…" style="display:none">
+                <select class="plain mono" id="openaiModelSelect" size="7" style="display:none"></select>
+                <div class="hint">У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.</div>
+              </div>
             </div>
-            <div data-p="anthropic" class="row" style="display:none">
-              <label class="field" style="flex:1"><span class="field-label">Модель</span><input type="text" id="anthropicModel"></label>
-              <label class="field" style="flex:1"><span class="field-label">API-ключ</span><input type="password" id="anthropicKey" placeholder="оставьте пустым — не изменится"></label>
+            <div data-p="anthropic" class="provider-block" style="display:none">
+              <div class="row">
+                <label class="field" style="flex:1"><span class="field-label">Модель</span>
+                  <select class="plain mono" id="anthropicPreset">
+                    <option value="claude-opus-5">claude-opus-5</option>
+                    <option value="claude-sonnet-5">claude-sonnet-5</option>
+                    <option value="claude-fable-5">claude-fable-5</option>
+                    <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+                    <option value="">— ввести вручную —</option>
+                  </select>
+                </label>
+                <label class="field" style="flex:1"><span class="field-label">API-ключ</span><input type="password" id="anthropicKey" placeholder="оставьте пустым — не изменится"></label>
+              </div>
+              <label class="field" id="anthropicManualWrap" style="display:none"><span class="field-label">Имя модели</span><input type="text" id="anthropicModel" class="mono"></label>
             </div>
             <div class="hint" id="providerStatusMsg"></div>
           </div>

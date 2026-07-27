@@ -83,7 +83,20 @@
       save_settings: () => ok({ path: "~/Library/Application Support/HHAgent/settings.json" }),
       get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
       setup_status: () => Promise.resolve(setup),
-      list_models: () => ok({ models: models.map(m => m.name) }),
+      list_models: () => {
+        // Для облачного провайдера отдаём длинный список, как у OpenRouter,
+        // чтобы проверялись фильтр и счётчик
+        const p = document.querySelector("#providerSeg button.active")?.dataset.p;
+        if (p === "openai_compat") return ok({ models: [
+          "deepseek/deepseek-r1:free", "deepseek/deepseek-chat-v3:free",
+          "meta-llama/llama-3.3-70b-instruct:free", "qwen/qwen-2.5-72b-instruct:free",
+          "google/gemma-3-27b-it:free", "mistralai/mistral-nemo:free",
+          "openai/gpt-4o-mini", "openai/gpt-4o", "anthropic/claude-sonnet-4.5",
+          "google/gemini-2.0-flash-001", "meta-llama/llama-3.1-8b-instruct",
+        ]});
+        return ok({ models: models.map(m => m.name) });
+      },
+      copy_to_clipboard: () => ok(),
       list_models_detail: () => ok({ models }),
       delete_model: (name) => { const i = models.findIndex(m => m.name === name); if (i >= 0) models.splice(i, 1); return ok(); },
       check_provider: () => ok({ message: "Ollama готова, модель gemma4:e4b-it-qat" }),

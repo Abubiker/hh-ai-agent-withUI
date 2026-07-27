@@ -69,17 +69,21 @@ async def handle_vpn_check(page) -> bool:
 
     print("🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...")
     for attempt in (1, 2):
+        # Проверка VPN с повторами занимает секунды — на остановке бросаем сразу,
+        # иначе агент продолжает стучаться к HH уже после нажатия «Остановить».
+        if control.should_stop():
+            return False
         try:
             btn = page.locator('text="Я не использую VPN"').first
             await btn.click(timeout=5000)
-            await asyncio.sleep(random.uniform(2.5, 4.0))
+            await control.sleep_or_stop(random.uniform(2.5, 4.0))
             if "vpncheeck" not in page.url:
                 print("   ✅ Проверка пройдена, продолжаю.")
                 return True
         except Exception:
             pass
         if attempt == 1:
-            await asyncio.sleep(3)
+            await control.sleep_or_stop(3)
 
     print("   ⚠️ Пройти проверку не удалось. Скорее всего включён VPN — "
           "отключите его, HH блокирует такие подключения.")
@@ -216,6 +220,11 @@ class HHClient:
             search_configs = settings.regions
 
             for config in search_configs:
+                # Проверяем и здесь: без этого после остановки агент успевал
+                # перейти к следующему региону и снова пойти на hh.ru.
+                if control.should_stop():
+                    print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                    return
                 print(f"📍 Режим: {config['name']}")
                 # quote_plus: в запросах есть пробелы и кириллица — кодируем явно,
                 # чтобы URL не зависел от того, как их нормализует браузер.
@@ -228,8 +237,11 @@ class HHClient:
                        f"{field}&order_by=publication_time"
                        f"{exp}{config['params']}")
                 await self.page.goto(url)
-                await asyncio.sleep(3)
+                await control.sleep_or_stop(3)
                 await handle_vpn_check(self.page)
+                if control.should_stop():
+                    print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                    return
                 page_num = 1
                 while True:
                     print(f"📄 Смотрю страницу {page_num} по запросу '{query}' ({config['name']})...")
@@ -489,20 +501,28 @@ class HHClient:
                         print(f"📑 Просмотрено {page_num} стр. — лимит на запрос, иду дальше.")
                         break
 
+                    if control.should_stop():
+                        print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                        return
+
                     # После того как все вакансии на странице обработаны, проверяем кнопку "Дальше"
                     next_btn = self.page.locator('a[data-qa="pager-next"]')
                     if await next_btn.count() > 0 and await next_btn.is_visible():
                         print("➡️ Перехожу на следующую страницу...")
                         await next_btn.click()
-                        await asyncio.sleep(4)
+                        await control.sleep_or_stop(4)
                         page_num += 1
                     else:
                         break
 
     async def check_chats(self, send_notification_func):
-        print("Проверка новых сообщений в чатах HH...")
+        # Вызывается сразу после поиска — без этой проверки агент шёл на hh.ru
+        # уже после нажатия «Остановить».
+        if control.should_stop():
+            return
+        print("Проверяю новые сообщения в чатах HH...")
         await self.page.goto("https://hh.ru/applicant/negotiations")
-        await asyncio.sleep(3)
+        await control.sleep_or_stop(3)
         
         # Находим список откликов с бейджем непрочитанных сообщений (надежный поиск через filter(has=...))
         chat_cards = await self.page.locator('div[data-qa="negotiations-item"]').filter(has=self.page.locator('span[data-qa="negotiations-item-badge"]')).all()

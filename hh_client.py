@@ -58,6 +58,63 @@ def find_stop_word(title: str):
     return m.group(0) if m else None
 
 
+# Поле сопроводительного письма ищем ТОЛЬКО по этим селекторам.
+# Раньше брался первый попавшийся textarea на странице — и у вакансий,
+# где HH отправляет отклик сразу по клику, агент заполнял поле сообщения
+# в чате, считая это письмом. Отклик уходил пустым, а в отчёте значилось
+# «письмо отправлено».
+LETTER_FIELD_SELECTORS = [
+    '[data-qa="vacancy-response-popup-form-letter-input"]',
+    '[data-qa="vacancy-response-letter-informer"] textarea',
+    '[data-qa*="letter-input"]',
+    'textarea[name="letter"]',
+    '[data-qa="vacancy-response-popup"] textarea',
+]
+
+# Кнопка/ссылка, раскрывающая поле письма
+LETTER_TOGGLE_SELECTORS = [
+    '[data-qa*="letter-toggle"]',
+    'text="Написать сопроводительное"',
+    'text="Добавить сопроводительное"',
+    'text="Сопроводительное письмо"',
+]
+
+
+async def find_letter_field(page):
+    """Возвращает видимое поле сопроводительного письма или None.
+
+    Никаких общих `textarea`: поле чата выглядит так же и находится на той
+    же странице, а перепутать их — значит отправить пустой отклик.
+    """
+    for selector in LETTER_FIELD_SELECTORS:
+        try:
+            field = page.locator(selector).first
+            if await field.is_visible(timeout=1000):
+                return field
+        except Exception:
+            continue
+    return None
+
+
+async def open_letter_field(page):
+    """Раскрывает поле письма, если оно спрятано за кнопкой, и возвращает его."""
+    field = await find_letter_field(page)
+    if field:
+        return field
+    for selector in LETTER_TOGGLE_SELECTORS:
+        try:
+            toggle = page.locator(selector).first
+            if await toggle.is_visible(timeout=1000):
+                await toggle.click()
+                await asyncio.sleep(1)
+                field = await find_letter_field(page)
+                if field:
+                    return field
+        except Exception:
+            continue
+    return None
+
+
 async def handle_vpn_check(page) -> bool:
     """HH подменяет страницу проверкой «VPN мешает работе сайта» (/vpncheeck).
     Именно это раньше принималось за капчу. Жмём «Я не использую VPN».
@@ -428,28 +485,26 @@ class HHClient:
                                     except Exception as e:
                                         print(f"⚠️ Ошибка при выборе резюме: {e}")
                                 
-                                    # Шаг 1: Ищем кнопку "Написать/Добавить сопроводительное" (если поле изначально скрыто)
-                                    toggle_btn = page.locator('[data-qa*="letter-toggle"]').or_(
-                                        page.locator('text="Написать сопроводительное"')
-                                    ).or_(
-                                        page.locator('text="Добавить сопроводительное"')
-                                    ).first
-                                    if await toggle_btn.is_visible():
-                                        try:
-                                            await toggle_btn.click()
-                                            await asyncio.sleep(1)
-                                        except:
-                                            pass
-                                
-                                    # Шаг 2: Ищем ЛЮБОЕ многострочное поле (textarea) и ждем его появления (до 3 сек)
+                                    # Шаг 1-2: находим поле письма (при необходимости раскрыв его)
+                                    # и убеждаемся, что текст реально в него попал.
                                     letter_sent = False
-                                    try:
-                                        letter_textarea = page.locator('textarea').first
-                                        await letter_textarea.wait_for(state="visible", timeout=3000)
-                                        await letter_textarea.fill(cover_letter)
-                                        letter_sent = True
-                                    except:
-                                        print(f"⚠️ Не удалось найти видимое поле (textarea) для письма: {title}")
+                                    letter_field = await open_letter_field(page)
+                                    if letter_field is None:
+                                        print(f"⚠️ Поле сопроводительного не найдено — отклик уйдёт без письма: {title}")
+                                    else:
+                                        try:
+                                            await letter_field.fill(cover_letter)
+                                            await asyncio.sleep(0.3)
+                                            # Проверяем: HH — реактивное приложение, и заполнение
+                                            # может не «прилипнуть». Верим только фактическому
+                                            # содержимому поля.
+                                            actual = await letter_field.input_value()
+                                            if actual.strip():
+                                                letter_sent = True
+                                            else:
+                                                print(f"⚠️ Письмо не удержалось в поле: {title}")
+                                        except Exception as e:
+                                            print(f"⚠️ Не удалось вписать письмо: {e}")
                                     
                                     # Шаг 3: Отправка отклика (ищем любую видимую кнопку отправки)
                                     submit_btn = page.locator('button[data-qa*="vacancy-response-submit"]:visible').first
@@ -457,17 +512,26 @@ class HHClient:
                                         await submit_btn.click() # РЕАЛЬНЫЙ ОТКЛИК
                                         await asyncio.sleep(2)
 
+                                        # Если формы письма не было (HH отправляет такие отклики
+                                        # сразу по клику), он сам предлагает дослать письмо —
+                                        # пользуемся этим, чтобы вакансия не осталась пустой.
+                                        if not letter_sent:
+                                            letter_sent = await self._attach_letter_after(page, cover_letter)
+
                                         database.add_applied_job(job_id, title, href)
                                         self.stats.applied += 1
+                                        if not letter_sent:
+                                            self.stats.applied_no_letter += 1
 
                                         import html
                                         safe_cover_letter = html.escape(cover_letter)
 
                                         if letter_sent:
                                             await send_notification_func(f"✅ Успешный отклик: <a href='{href}'>{title}</a>\n\n<b>Письмо:</b>\n<i>{safe_cover_letter}</i>", kind="applied")
+                                            print(f"✅ Отклик отправлен с письмом: {title}")
                                         else:
-                                            await send_notification_func(f"✅ Отклик без письма: <a href='{href}'>{title}</a>\n\n<i>(Работодатель отключил возможность отправки писем для этой вакансии)</i>", kind="applied")
-                                        print(f"✅ Отклик отправлен: {title}")
+                                            await send_notification_func(f"✅ Отклик <b>без письма</b>: <a href='{href}'>{title}</a>\n\n<i>(HH не дал приложить сопроводительное к этой вакансии)</i>", kind="applied")
+                                            print(f"✅ Отклик отправлен БЕЗ письма: {title}")
                                     else:
                                         self.stats.apply_failed += 1
                                         print(f"⚠️ Не нашёл кнопку отправки отклика: {title}")
@@ -514,6 +578,51 @@ class HHClient:
                         page_num += 1
                     else:
                         break
+
+    async def _attach_letter_after(self, page, cover_letter: str) -> bool:
+        """Дописывает сопроводительное уже после отправленного отклика.
+
+        Часть вакансий на HH откликается в один клик, без формы письма —
+        зато после отклика он сам показывает «Добавить сопроводительное».
+        Раньше агент этого не делал и отклик навсегда оставался пустым.
+        """
+        try:
+            await asyncio.sleep(1.5)  # даём отрисоваться экрану после отклика
+            link = page.locator(
+                'text="Добавить сопроводительное"').or_(
+                page.locator('text="Написать сопроводительное"')).first
+            if not await link.is_visible(timeout=3000):
+                return False
+
+            print("✍️ Досылаю сопроводительное после отклика…")
+            await link.click()
+            await asyncio.sleep(1)
+
+            field = await find_letter_field(page)
+            if field is None:
+                # Здесь письмо отправляется как сообщение в чат отклика
+                field = page.locator('textarea:visible').first
+                if not await field.is_visible(timeout=2000):
+                    return False
+
+            await field.fill(cover_letter)
+            await asyncio.sleep(0.3)
+            if not (await field.input_value()).strip():
+                return False
+
+            send = page.locator(
+                'button[data-qa*="letter-send"]').or_(
+                page.locator('button[data-qa*="chat-form-submit"]')).or_(
+                page.locator('button:has-text("Отправить")')).first
+            if not await send.is_visible(timeout=2000):
+                return False
+            await send.click()
+            await asyncio.sleep(1.5)
+            print("✅ Сопроводительное дослано после отклика")
+            return True
+        except Exception as e:
+            print(f"⚠️ Не удалось дослать сопроводительное: {e}")
+            return False
 
     async def check_chats(self, send_notification_func):
         # Вызывается сразу после поиска — без этой проверки агент шёл на hh.ru

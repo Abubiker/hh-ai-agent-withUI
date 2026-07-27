@@ -11,6 +11,7 @@ class Stats:
     ai_reject: int = 0      # отклонены ИИ
     letters: int = 0        # сгенерировано сопроводительных писем
     applied: int = 0        # успешно отправленных откликов
+    applied_no_letter: int = 0  # из них ушедших без сопроводительного
     already: int = 0        # вакансия уже была с откликом (кнопки отклика нет)
     apply_failed: int = 0   # подходила, но откликнуться не удалось
     skipped_page: int = 0   # страница не открылась: архив, редирект, капча
@@ -24,6 +25,8 @@ class Stats:
             f"• Отклонены ИИ: {self.ai_reject}\n"
             f"• Написано сопроводительных: {self.letters}\n"
             f"• ✅ Откликов отправлено: <b>{self.applied}</b>\n"
+            + (f"• ⚠️ Из них без письма: {self.applied_no_letter}\n"
+               if self.applied_no_letter else "") +
             f"• Уже был отклик (пропущено): {self.already}\n"
             f"• Страница не открылась (архив/капча): {self.skipped_page}\n"
             f"• ⚠️ Не удалось откликнуться: {self.apply_failed}"

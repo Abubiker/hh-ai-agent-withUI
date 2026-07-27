@@ -154,6 +154,97 @@ async def find_letter_field(page, verbose: bool = False):
     return None
 
 
+# Кнопка отправки отклика. Ищем так же, как поле письма: осматриваем
+# страницу, а не полагаемся на единственное угаданное имя. Прошлый селектор
+# 'button[data-qa*="vacancy-response-submit"]' не совпадал с кнопкой в
+# попапе — письмо вписывалось, а отклик не уходил.
+BUTTON_SELECTOR = 'button, input[type="submit"]'
+
+SUBMIT_QA_HINTS = ("vacancy-response-submit", "response-submit", "letter-send",
+                   "vacancy-response-letter", "submit")
+SUBMIT_TEXT_HINTS = ("откликнуться", "отправить отклик", "отправить письмо",
+                     "отправить", "подтвердить")
+# Кнопки, на которые нажимать нельзя ни при каких условиях
+SUBMIT_TEXT_BLOCK = ("отмен", "закрыть", "назад", "не сейчас", "передумал",
+                     "пожаловаться", "поделиться")
+
+_COLLECT_BUTTONS_JS = """
+() => {
+  const out = [];
+  document.querySelectorAll('button, input[type="submit"]').forEach((el, i) => {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const visible = r.width > 1 && r.height > 1 &&
+                    cs.visibility !== 'hidden' && cs.display !== 'none';
+    const ctx = [];
+    let p = el;
+    for (let d = 0; d < 8 && p; d++, p = p.parentElement) {
+      const q = p.getAttribute && p.getAttribute('data-qa');
+      if (q) ctx.push(q);
+    }
+    out.push({
+      index: i,
+      visible,
+      disabled: el.disabled,
+      qa: el.getAttribute('data-qa') || '',
+      text: (el.innerText || el.value || '').trim().slice(0, 60),
+      ctx: ctx.join(' '),
+    });
+  });
+  return out;
+}
+"""
+
+
+async def list_buttons(page) -> list[dict]:
+    try:
+        return await page.evaluate(_COLLECT_BUTTONS_JS)
+    except Exception:
+        return []
+
+
+async def find_submit_button(page, verbose: bool = True):
+    """Ищет кнопку отправки отклика, осматривая страницу."""
+    buttons = await list_buttons(page)
+    usable = [b for b in buttons if b["visible"] and not b["disabled"]]
+    if not usable:
+        return None
+
+    def blocked(b):
+        return any(w in b["text"].lower() for w in SUBMIT_TEXT_BLOCK)
+
+    # 1) По data-qa (своему или родительского блока)
+    for b in usable:
+        if blocked(b):
+            continue
+        hay = (b["qa"] + " " + b["ctx"]).lower()
+        if any(h in hay for h in SUBMIT_QA_HINTS):
+            if verbose:
+                print(f"   кнопка отправки: data-qa={b['qa'] or '—'} «{b['text']}»")
+            return page.locator(BUTTON_SELECTOR).nth(b["index"])
+
+    # 2) По надписи на кнопке
+    for hint in SUBMIT_TEXT_HINTS:
+        for b in usable:
+            if blocked(b):
+                continue
+            if hint in b["text"].lower():
+                if verbose:
+                    print(f"   кнопка отправки по надписи: «{b['text']}»")
+                return page.locator(BUTTON_SELECTOR).nth(b["index"])
+    return None
+
+
+async def dump_buttons(page):
+    """Печатает кнопки страницы — чтобы было видно, как HH назвал нужную."""
+    buttons = await list_buttons(page)
+    visible = [b for b in buttons if b["visible"]]
+    print(f"   кнопки на странице ({len(visible)} видимых из {len(buttons)}):")
+    for b in visible[:25]:
+        print(f"     [{b['index']}] data-qa={b['qa'] or '—'} «{b['text'] or '—'}» "
+              f"ctx={b['ctx'][:70] or '—'}")
+
+
 async def dump_textareas(page, title: str = ""):
     """Печатает, какие поля есть на странице. Нужно, когда поле письма не
     нашлось: по этому выводу видно, как HH назвал его на самом деле."""
@@ -409,6 +500,11 @@ class HHClient:
                     return
                 page_num = 1
                 while True:
+                    # Проверка до печати: иначе после остановки в журнал успевала
+                    # попасть строка «Смотрю страницу N» уже ненужной страницы.
+                    if control.should_stop():
+                        print("⏹️ Получен сигнал остановки — прерываю поиск.")
+                        return
                     print(f"📄 Смотрю страницу {page_num} по запросу '{query}' ({config['name']})...")
                     vacancies = await self.page.locator('a[data-qa="serp-item__title"]').all()
 
@@ -624,9 +720,9 @@ class HHClient:
                                         print(f"⏭️ Отклик не отправлен (нет письма): {title}")
                                         raise SkipVacancy("no_letter")
 
-                                    # Шаг 3: Отправка отклика (ищем любую видимую кнопку отправки)
-                                    submit_btn = page.locator('button[data-qa*="vacancy-response-submit"]:visible').first
-                                    if await submit_btn.is_visible():
+                                    # Шаг 3: отправка отклика
+                                    submit_btn = await find_submit_button(page)
+                                    if submit_btn is not None:
                                         await submit_btn.click() # РЕАЛЬНЫЙ ОТКЛИК
                                         await asyncio.sleep(2)
 
@@ -653,6 +749,9 @@ class HHClient:
                                     else:
                                         self.stats.apply_failed += 1
                                         print(f"⚠️ Не нашёл кнопку отправки отклика: {title}")
+                                        # Показываем, что за кнопки на странице — по этому
+                                        # выводу видно, как HH назвал нужную.
+                                        await dump_buttons(page)
                                 else:
                                     self.stats.already += 1
                                     print(f"Кнопка отклика не найдена (возможно, уже откликались): {title}")

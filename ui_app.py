@@ -316,7 +316,8 @@ class AgentBridge:
             finally:
                 if client:
                     self._emit("stats", client.stats.__dict__)
-                    self._log(client.stats.summary_plain())
+                    # Отдельный _log не нужен: sinks включают UISink и сами
+                    # пишут итоги в окно — иначе статистика дублировалась.
                     try:
                         await client.sinks.notify(client.stats.summary(), kind="summary")
                         await client.sinks.close()

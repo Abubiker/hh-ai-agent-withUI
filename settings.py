@@ -40,6 +40,10 @@ DEFAULTS = {
             {"name": "Вся Россия (только удаленка)", "params": "&area=113&schedule=remote", "enabled": True},
         ],
         "experience": ["between1And3", "between3And6", "moreThan6"],
+        # Отклики без сопроводительного часто не рассматривают, поэтому по
+        # умолчанию пустой отклик не отправляется: вакансия уходит в
+        # уведомление с готовым письмом, чтобы откликнуться вручную.
+        "require_letter": True,
     },
     "resume": {
         # Должно посимвольно совпадать с названием резюме на hh.ru,
@@ -332,6 +336,11 @@ class Settings:
     @property
     def experience(self) -> list[str]:
         return self.data["search"]["experience"]
+
+    @property
+    def require_letter(self) -> bool:
+        """Не отправлять отклик, если сопроводительное приложить не удалось."""
+        return bool(self.data["search"].get("require_letter", True))
 
     @property
     def target_resume_name(self) -> str:

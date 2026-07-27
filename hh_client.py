@@ -58,61 +58,163 @@ def find_stop_word(title: str):
     return m.group(0) if m else None
 
 
-# Поле сопроводительного письма ищем ТОЛЬКО по этим селекторам.
-# Раньше брался первый попавшийся textarea на странице — и у вакансий,
-# где HH отправляет отклик сразу по клику, агент заполнял поле сообщения
-# в чате, считая это письмом. Отклик уходил пустым, а в отчёте значилось
-# «письмо отправлено».
-LETTER_FIELD_SELECTORS = [
-    '[data-qa="vacancy-response-popup-form-letter-input"]',
-    '[data-qa="vacancy-response-letter-informer"] textarea',
-    '[data-qa*="letter-input"]',
-    'textarea[name="letter"]',
-    '[data-qa="vacancy-response-popup"] textarea',
-]
-
 # Кнопка/ссылка, раскрывающая поле письма
 LETTER_TOGGLE_SELECTORS = [
     '[data-qa*="letter-toggle"]',
+    '[data-qa*="letter-informer"]',
     'text="Написать сопроводительное"',
     'text="Добавить сопроводительное"',
     'text="Сопроводительное письмо"',
+    'text="Прикрепить сопроводительное"',
+    'text=/сопроводительн/i',
 ]
 
+# Признаки поля письма и поля чата. Раньше поле искалось по списку
+# угаданных data-qa — если HH называл его иначе, не находилось ничего
+# и отклики уходили пустыми. Теперь страница осматривается целиком,
+# а кандидаты отбираются по признакам.
+LETTER_HINTS = ("letter", "covering", "сопроводит", "cover")
+CHAT_HINTS = ("chat", "chatik", "negotiation", "messag", "сообщени", "topic")
 
-async def find_letter_field(page):
-    """Возвращает видимое поле сопроводительного письма или None.
+# Собираем все textarea со страницы вместе с контекстом (data-qa родителей),
+# чтобы отличить поле письма от поля чата, не завися от точных имён.
+_COLLECT_TEXTAREAS_JS = """
+() => {
+  const out = [];
+  document.querySelectorAll('textarea').forEach((el, i) => {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const visible = r.width > 1 && r.height > 1 &&
+                    cs.visibility !== 'hidden' && cs.display !== 'none';
+    const ctx = [];
+    let p = el;
+    for (let d = 0; d < 8 && p; d++, p = p.parentElement) {
+      const q = p.getAttribute && p.getAttribute('data-qa');
+      if (q) ctx.push(q);
+    }
+    out.push({
+      index: i,
+      visible,
+      qa: el.getAttribute('data-qa') || '',
+      name: el.getAttribute('name') || '',
+      id: el.id || '',
+      placeholder: el.getAttribute('placeholder') || '',
+      aria: el.getAttribute('aria-label') || '',
+      ctx: ctx.join(' '),
+      disabled: el.disabled || el.readOnly,
+    });
+  });
+  return out;
+}
+"""
 
-    Никаких общих `textarea`: поле чата выглядит так же и находится на той
-    же странице, а перепутать их — значит отправить пустой отклик.
+
+def _haystack(ta: dict) -> str:
+    return " ".join(str(ta.get(k, "")) for k in
+                    ("qa", "name", "id", "placeholder", "aria", "ctx")).lower()
+
+
+async def list_textareas(page) -> list[dict]:
+    try:
+        return await page.evaluate(_COLLECT_TEXTAREAS_JS)
+    except Exception:
+        return []
+
+
+async def find_letter_field(page, verbose: bool = False):
+    """Ищет поле сопроводительного письма, осматривая страницу.
+
+    Порядок: явные признаки письма → единственная подходящая textarea,
+    не принадлежащая чату. Поле чата исключается всегда: перепутать их —
+    значит отправить пустой отклик, о чём агент раньше рапортовал как об
+    успехе.
     """
-    for selector in LETTER_FIELD_SELECTORS:
-        try:
-            field = page.locator(selector).first
-            if await field.is_visible(timeout=1000):
-                return field
-        except Exception:
-            continue
+    areas = await list_textareas(page)
+    usable = [t for t in areas if t["visible"] and not t["disabled"]]
+    if not usable:
+        return None
+
+    # 1) Явно поле письма
+    for ta in usable:
+        hay = _haystack(ta)
+        if any(h in hay for h in LETTER_HINTS):
+            if verbose:
+                print(f"   поле письма: data-qa={ta['qa'] or '—'} name={ta['name'] or '—'}")
+            return page.locator("textarea").nth(ta["index"])
+
+    # 2) Всё, что не чат. Если кандидат один — это он.
+    non_chat = [t for t in usable if not any(h in _haystack(t) for h in CHAT_HINTS)]
+    if len(non_chat) == 1:
+        ta = non_chat[0]
+        if verbose:
+            print(f"   поле письма (единственное подходящее): "
+                  f"data-qa={ta['qa'] or '—'} placeholder={ta['placeholder'] or '—'}")
+        return page.locator("textarea").nth(ta["index"])
+
     return None
 
 
-async def open_letter_field(page):
+async def dump_textareas(page, title: str = ""):
+    """Печатает, какие поля есть на странице. Нужно, когда поле письма не
+    нашлось: по этому выводу видно, как HH назвал его на самом деле."""
+    areas = await list_textareas(page)
+    if not areas:
+        print("   на странице нет ни одного textarea")
+        return
+    print(f"   поля на странице ({len(areas)}):")
+    for ta in areas:
+        state = "видимое" if ta["visible"] else "скрытое"
+        print(f"     [{ta['index']}] {state} data-qa={ta['qa'] or '—'} "
+              f"name={ta['name'] or '—'} placeholder={ta['placeholder'] or '—'} "
+              f"ctx={ta['ctx'][:80] or '—'}")
+
+
+async def open_letter_field(page, verbose: bool = True):
     """Раскрывает поле письма, если оно спрятано за кнопкой, и возвращает его."""
-    field = await find_letter_field(page)
+    field = await find_letter_field(page, verbose=verbose)
     if field:
         return field
+
+    # Поле часто скрыто за ссылкой «Написать сопроводительное»
     for selector in LETTER_TOGGLE_SELECTORS:
         try:
             toggle = page.locator(selector).first
-            if await toggle.is_visible(timeout=1000):
+            if await toggle.is_visible(timeout=800):
                 await toggle.click()
-                await asyncio.sleep(1)
-                field = await find_letter_field(page)
+                await asyncio.sleep(1.2)
+                field = await find_letter_field(page, verbose=verbose)
                 if field:
                     return field
         except Exception:
             continue
     return None
+
+
+async def fill_letter(field, text: str) -> bool:
+    """Вписывает письмо и проверяет, что оно осталось в поле.
+
+    HH — реактивное приложение: fill() иногда не доходит до состояния формы,
+    и поле сбрасывается. Поэтому после заполнения значение читается обратно,
+    а при неудаче текст набирается посимвольно, как это делал бы человек.
+    """
+    try:
+        await field.fill(text)
+        await asyncio.sleep(0.4)
+        if (await field.input_value()).strip():
+            return True
+    except Exception:
+        pass
+
+    # Запасной путь: клик + набор текста (некоторые формы слушают только события ввода)
+    try:
+        await field.click()
+        await asyncio.sleep(0.2)
+        await field.type(text[:2000], delay=1)
+        await asyncio.sleep(0.4)
+        return bool((await field.input_value()).strip())
+    except Exception as e:
+        print(f"   не удалось вписать письмо: {e}")
+        return False
 
 
 async def handle_vpn_check(page) -> bool:
@@ -496,22 +598,32 @@ class HHClient:
                                     letter_sent = False
                                     letter_field = await open_letter_field(page)
                                     if letter_field is None:
-                                        print(f"⚠️ Поле сопроводительного не найдено — отклик уйдёт без письма: {title}")
+                                        print(f"⚠️ Поле сопроводительного не найдено: {title}")
+                                        # Печатаем, что вообще есть на странице: по этому выводу
+                                        # видно, как HH назвал поле, если разметка изменилась.
+                                        await dump_textareas(page, title)
                                     else:
-                                        try:
-                                            await letter_field.fill(cover_letter)
-                                            await asyncio.sleep(0.3)
-                                            # Проверяем: HH — реактивное приложение, и заполнение
-                                            # может не «прилипнуть». Верим только фактическому
-                                            # содержимому поля.
-                                            actual = await letter_field.input_value()
-                                            if actual.strip():
-                                                letter_sent = True
-                                            else:
-                                                print(f"⚠️ Письмо не удержалось в поле: {title}")
-                                        except Exception as e:
-                                            print(f"⚠️ Не удалось вписать письмо: {e}")
-                                    
+                                        letter_sent = await fill_letter(letter_field, cover_letter)
+                                        if letter_sent:
+                                            print("   ✅ письмо вписано в форму отклика")
+                                        else:
+                                            print(f"⚠️ Письмо не удержалось в поле: {title}")
+
+                                    # Без письма отклики часто не рассматривают, поэтому по
+                                    # умолчанию пустой отклик не отправляем: вакансия уходит
+                                    # в уведомление вместе с готовым письмом — откликнуться
+                                    # вручную дешевле, чем сжечь вакансию впустую.
+                                    if not letter_sent and settings.require_letter:
+                                        self.stats.skipped_no_letter += 1
+                                        database.add_applied_job(job_id, title, href)
+                                        import html as _html
+                                        await send_notification_func(
+                                            f"⚠️ <b>Не смог приложить письмо</b>: <a href='{href}'>{title}</a>\n"
+                                            f"Отклик не отправлен. Письмо готово — можно откликнуться вручную:\n\n"
+                                            f"<i>{_html.escape(cover_letter)}</i>", kind="error")
+                                        print(f"⏭️ Отклик не отправлен (нет письма): {title}")
+                                        raise SkipVacancy("no_letter")
+
                                     # Шаг 3: Отправка отклика (ищем любую видимую кнопку отправки)
                                     submit_btn = page.locator('button[data-qa*="vacancy-response-submit"]:visible').first
                                     if await submit_btn.is_visible():
@@ -550,8 +662,11 @@ class HHClient:
                                 print(f"❌ ИИ отклонил: {title}")
                                 database.add_applied_job(job_id, title, href) # Добавляем, чтобы больше не анализировать
 
-                        except SkipVacancy:
-                            self.stats.skipped_page += 1  # штатный пропуск, уже залогирован
+                        except SkipVacancy as skip:
+                            # Пропуск из-за ненайденного письма уже посчитан отдельно —
+                            # иначе вакансия попала бы сразу в два счётчика.
+                            if str(skip) != "no_letter":
+                                self.stats.skipped_page += 1
                         except Exception as e:
                             # Сюда попадает и сбой связи с моделью (is_vacancy_suitable бросает
                             # исключение). Вакансию НЕ записываем в базу — вернёмся к ней позже.

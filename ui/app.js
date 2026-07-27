@@ -36,16 +36,20 @@ async function loadSettings() {
 
   renderQueryChips();
   setSwitch("titleOnlySwitch", !!s.search.title_only);
-  updateQueriesInfo();
+  setSwitch("requireLetterSwitch", s.search.require_letter !== false);
 
   $("maxPagesVal").textContent = s.search.max_pages_per_query;
-  updateMaxPagesHint();
   $("pauseVal").textContent = s.schedule.cycle_pause_minutes + " мин";
 
   renderExperience();
   renderRegions();
   updateRegionsCount();
   renderWorkRegionChips();
+
+  // Считаем страницы ПОСЛЕ того, как заданы и лимит страниц, и регионы:
+  // иначе в подсказке оказывалось «≈ 0 страниц».
+  updateMaxPagesHint();
+  updateQueriesInfo();
 
   $("providerSeg").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.p === s.llm.provider));
   syncProviderFields();
@@ -86,6 +90,7 @@ function collect() {
     search: {
       queries: state._queries || [],
       title_only: hasClass("titleOnlySwitch", "on"),
+      require_letter: hasClass("requireLetterSwitch", "on"),
       max_pages_per_query: parseInt($("maxPagesVal").textContent, 10) || 2,
       regions,
       experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),
@@ -612,6 +617,7 @@ wireSwitch("desktopSwitch");
 wireSwitch("telegramSwitch", on => { $("tgFields").style.display = on ? "" : "none"; });
 wireSwitch("keychainSwitch");
 wireSwitch("titleOnlySwitch", () => updateQueriesInfo());
+wireSwitch("requireLetterSwitch");
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».
 // Функция была написана, но не вызвана — кнопки +/− не работали вовсе.

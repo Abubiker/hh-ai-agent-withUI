@@ -12,6 +12,7 @@ class Stats:
     letters: int = 0        # сгенерировано сопроводительных писем
     applied: int = 0        # успешно отправленных откликов
     applied_no_letter: int = 0  # из них ушедших без сопроводительного
+    skipped_no_letter: int = 0  # подходили, но письмо приложить не удалось
     already: int = 0        # вакансия уже была с откликом (кнопки отклика нет)
     apply_failed: int = 0   # подходила, но откликнуться не удалось
     skipped_page: int = 0   # страница не открылась: архив, редирект, капча
@@ -26,7 +27,9 @@ class Stats:
             f"• Написано сопроводительных: {self.letters}\n"
             f"• ✅ Откликов отправлено: <b>{self.applied}</b>\n"
             + (f"• ⚠️ Из них без письма: {self.applied_no_letter}\n"
-               if self.applied_no_letter else "") +
+               if self.applied_no_letter else "")
+            + (f"• ⚠️ Пропущено — не вышло приложить письмо: {self.skipped_no_letter}\n"
+               if self.skipped_no_letter else "") +
             f"• Уже был отклик (пропущено): {self.already}\n"
             f"• Страница не открылась (архив/капча): {self.skipped_page}\n"
             f"• ⚠️ Не удалось откликнуться: {self.apply_failed}"

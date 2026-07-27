@@ -19,6 +19,7 @@
         { name: "Вся Россия (только удаленка)", params: "&area=113&schedule=remote", enabled: true },
       ],
       experience: ["between1And3", "between3And6", "moreThan6"],
+      require_letter: true,
     },
     resume: {
       target_name: "Тестировщик",

@@ -80,7 +80,8 @@ html, body {
    тексте — журнал, поля, сообщения об ошибках. */
 .titlebar, .sidebar, .nav-item, .btn, .seg, .provider-seg, .switch,
 .chip-add, .check-line, .step, .now-chip, .funnel-row .label,
-.card-title, .page-head, .model-row .use, .model-row .del, .sched-chip {
+.card-title, .page-head, .model-row .use, .model-row .del, .sched-chip,
+.region-chip {
   -webkit-user-select: none; user-select: none;
 }
 
@@ -405,7 +406,9 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .chip-add:hover { color: var(--text); border-color: var(--faint); }
 
 /* ---------- регионы ---------- */
-.region-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--surf2); border: 1px solid var(--line2); }
+.region-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-inner); background: var(--surf2); border: 1px solid var(--line2); transition: opacity 120ms; }
+.region-card .switch { flex: none; width: 34px; height: 20px; }
+.region-card .switch .knob { width: 16px; height: 16px; }
 .region-card .icon { flex: none; color: var(--dim); }
 .region-card .text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .region-card .text .t { font: 590 13px/1.2 -apple-system, system-ui, sans-serif; }
@@ -415,8 +418,25 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .region-card .actions { display: flex; gap: 6px; flex: none; }
 .region-card .actions button { height: 26px; padding: 0 10px; border-radius: 8px; background: var(--surf); border: 1px solid var(--line2); font-size: 11.5px; color: var(--dim); cursor: pointer; }
 .region-card .actions .rm { width: 26px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); border: none; background: none; }
+/* Выключенный регион — вся карточка притушена, кроме переключателя (им же и включать обратно) */
+.region-card.disabled { opacity: .5; }
+.region-card.disabled .switch { opacity: 1; }
 .region-add { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border-radius: var(--radius-inner); border: 1px dashed var(--line); color: var(--dim); font-size: 12.5px; background: none; cursor: pointer; width: 100%; }
 .region-add:hover { color: var(--text); }
+
+/* ---------- чипы регионов на экране «Работа» ---------- */
+.region-chip {
+  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 12px;
+  border-radius: var(--radius-control); border: 1px solid var(--line2); background: var(--surf);
+  color: var(--faint); font-size: 12.5px; cursor: pointer; font-family: inherit;
+  opacity: .55; transition: opacity 120ms, background 120ms, color 120ms;
+}
+.region-chip:hover { opacity: .8; }
+.region-chip.on {
+  opacity: 1; color: var(--text); background: color-mix(in srgb, var(--accent) 14%, var(--surf2));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line2));
+}
+.region-chip.on:hover { opacity: 1; }
 
 /* ---------- сегментированный выбор провайдера ---------- */
 .provider-seg { display: flex; gap: 3px; padding: 3px; border-radius: 11px; background: var(--surf2); }

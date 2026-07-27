@@ -80,6 +80,13 @@
             <div id="workHeadRight"></div>
           </div>
 
+          <!-- Регионы поиска — переключаются прямо здесь, без похода в Фильтры.
+               Выключенный регион остаётся настроенным, просто агент по нему не ходит. -->
+          <div class="row" style="align-items:center;gap:8px">
+            <div class="hint" style="flex:none">Ищу в:</div>
+            <div class="chips" id="workRegionChips" style="flex:1"></div>
+          </div>
+
           <!-- состояние: не готово -->
           <div id="stateNotReady" class="card">
             <div class="card-title-row">

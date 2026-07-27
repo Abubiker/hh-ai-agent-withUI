@@ -265,6 +265,15 @@ class HHClient:
 
     async def search_and_apply(self, send_notification_func):
         print("Начинаем поиск вакансий...")
+
+        # Регионы включаются/выключаются с экрана «Работа» без похода
+        # в Фильтры — проверяем один раз на весь проход, а не на каждый запрос.
+        active_regions = settings.active_regions
+        if not active_regions:
+            print("⚠️ Нет ни одного включённого региона — включите хотя бы один "
+                  "на экране «Работа» или в Фильтрах.")
+            return
+
         for query in settings.search_queries:
             if control.should_stop():
                 print("⏹️ Получен сигнал остановки — прерываю поиск.")
@@ -273,10 +282,7 @@ class HHClient:
             print(f"🔍 Поиск по запросу: {query}")
             print(f"======================================")
 
-            # Регионы и режимы поиска задаются в настройках
-            search_configs = settings.regions
-
-            for config in search_configs:
+            for config in active_regions:
                 # Проверяем и здесь: без этого после остановки агент успевал
                 # перейти к следующему региону и снова пойти на hh.ru.
                 if control.should_stop():

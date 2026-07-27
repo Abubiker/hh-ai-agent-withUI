@@ -45,6 +45,7 @@ async function loadSettings() {
   renderExperience();
   renderRegions();
   updateRegionsCount();
+  renderWorkRegionChips();
 
   $("providerSeg").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.p === s.llm.provider));
   syncProviderFields();
@@ -193,7 +194,8 @@ function renderQueryChips() {
 }
 
 function totalPages() {
-  const q = (state._queries || []).length, r = (state._regions || []).length;
+  const q = (state._queries || []).length;
+  const r = (state._regions || []).filter(x => x.enabled !== false).length;
   const mp = parseInt($("maxPagesVal").textContent, 10) || 0;
   return q * r * mp;
 }
@@ -249,13 +251,30 @@ function scheduleOf(params) {
   return m ? m[1] : "";
 }
 
+function enabledCount() {
+  return (state._regions || []).filter(r => r.enabled !== false).length;
+}
+
+/** Включает/выключает регион. Последний включённый выключить нельзя —
+ * агенту нужен хотя бы один, иначе искать негде (см. active_regions в hh_client). */
+function toggleRegion(i) {
+  const r = state._regions[i];
+  const turningOff = r.enabled !== false;
+  if (turningOff && enabledCount() <= 1) return false;
+  r.enabled = !turningOff;
+  scheduleSave();
+  return true;
+}
+
 function renderRegions() {
-  state._regions = state._regions || state.settings.search.regions.map(r => ({ ...r }));
+  state._regions = state._regions || state.settings.search.regions.map(r => ({ enabled: true, ...r }));
   const box = $("regionCards");
   const single = state._regions.length <= 1;
   box.innerHTML = state._regions.map((r, i) => {
     const sched = scheduleOf(r.params);
-    return `<div class="region-card">
+    const on = r.enabled !== false;
+    return `<div class="region-card${on ? "" : " disabled"}">
+      <div class="switch${on ? " on" : ""}" data-toggle="${i}" title="${on ? "Выключить" : "Включить"} регион"><div class="knob"></div></div>
       <span class="icon">${sched === "remote" ? ICON.globe15 : ICON.pin15}</span>
       <div class="text"><div class="t">${esc(r.name)}</div>
         <div class="d">${sched ? `<span class="badge">${SCHEDULE_LABELS[sched] || sched}</span>` : "Любой график"}</div></div>
@@ -266,11 +285,35 @@ function renderRegions() {
       </div>
     </div>`;
   }).join("");
+  box.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => {
+    toggleRegion(+el.dataset.toggle);
+    renderRegions(); updateRegionsCount(); updateQueriesInfo(); renderWorkRegionChips();
+  });
   box.querySelectorAll("[data-e]").forEach(b => b.onclick = () => openRegionModal(+b.dataset.e));
   box.querySelectorAll("[data-r]").forEach(b => b.onclick = () => {
     state._regions.splice(+b.dataset.r, 1);
-    renderRegions(); updateRegionsCount(); updateQueriesInfo(); scheduleSave();
+    renderRegions(); updateRegionsCount(); updateQueriesInfo(); renderWorkRegionChips(); scheduleSave();
   });
+}
+
+/** Компактная строка регионов на экране «Работа» — переключение без похода
+ * во вкладку «Фильтры». Использует те же данные, что и карточки в Фильтрах. */
+function renderWorkRegionChips() {
+  const box = $("workRegionChips");
+  if (!box) return;
+  state._regions = state._regions || state.settings.search.regions.map(r => ({ enabled: true, ...r }));
+  box.innerHTML = state._regions.map((r, i) => {
+    const on = r.enabled !== false;
+    return `<button class="region-chip${on ? " on" : ""}" data-wt="${i}" title="${on ? "Выключить" : "Включить"} регион">
+      ${scheduleOf(r.params) === "remote" ? ICON.globe15 : ICON.pin15}${esc(r.name)}
+    </button>`;
+  }).join("") + `<button class="chip-add" id="btnWorkAddRegion">${ICON.plus12} Регион</button>`;
+  box.querySelectorAll("[data-wt]").forEach(b => b.onclick = () => {
+    toggleRegion(+b.dataset.wt);
+    renderWorkRegionChips(); renderRegions(); updateRegionsCount(); updateQueriesInfo();
+  });
+  const addBtn = $("btnWorkAddRegion");
+  if (addBtn) addBtn.onclick = () => openRegionModal(undefined);
 }
 
 /* ---------- модалка региона (со справочником hh.ru) ---------- */
@@ -345,17 +388,20 @@ function renderScheduleChips() {
 
 function regionModalResult() {
   const m = state._regionModal;
+  // При редактировании сохраняем текущее enabled; у нового региона — включён сразу.
+  const enabled = m.index !== undefined ? state._regions[m.index].enabled !== false : true;
   const manual = $("areaManual").style.display !== "none";
   if (manual) {
     const name = $("manualName").value.trim();
     const params = $("manualParams").value.trim();
-    return name && params ? { name, params } : null;
+    return name && params ? { name, params, enabled } : null;
   }
   if (!m.areaId) return null;
   const schedTag = m.schedule ? ` (${SCHEDULE_LABELS[m.schedule] || m.schedule})` : "";
   return {
     name: m.name + schedTag,
     params: `&area=${m.areaId}` + (m.schedule ? `&schedule=${m.schedule}` : ""),
+    enabled,
   };
 }
 
@@ -380,7 +426,7 @@ $("regionModalSave").onclick = () => {
   if (i !== undefined) state._regions[i] = r;
   else state._regions.push(r);
   $("regionModalBox").classList.remove("show");
-  renderRegions(); updateRegionsCount(); updateQueriesInfo(); scheduleSave();
+  renderRegions(); updateRegionsCount(); updateQueriesInfo(); renderWorkRegionChips(); scheduleSave();
 };
 $("regionModalCancel").onclick = () => $("regionModalBox").classList.remove("show");
 $("btnAddRegion").onclick = () => openRegionModal(undefined);

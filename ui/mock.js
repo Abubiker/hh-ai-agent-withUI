@@ -15,8 +15,8 @@
       title_only: true,
       max_pages_per_query: 2,
       regions: [
-        { name: "Москва (любой график)", params: "&area=1" },
-        { name: "Вся Россия (только удаленка)", params: "&area=113&schedule=remote" },
+        { name: "Москва (любой график)", params: "&area=1", enabled: true },
+        { name: "Вся Россия (только удаленка)", params: "&area=113&schedule=remote", enabled: true },
       ],
       experience: ["between1And3", "between3And6", "moreThan6"],
     },

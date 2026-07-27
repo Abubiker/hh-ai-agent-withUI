@@ -32,9 +32,12 @@ DEFAULTS = {
         # Без лимита агент уходит вглубь первого запроса на сотни вакансий и
         # до остальных не добирается за сеанс.
         "max_pages_per_query": 2,
+        # enabled управляет тем, ходит ли агент по региону в ЭТОМ сеансе —
+        # можно быстро отключить регион с экрана «Работа», не удаляя его
+        # настройку (график, параметры) из Фильтров.
         "regions": [
-            {"name": "Москва (любой график)", "params": "&area=1"},
-            {"name": "Вся Россия (только удаленка)", "params": "&area=113&schedule=remote"},
+            {"name": "Москва (любой график)", "params": "&area=1", "enabled": True},
+            {"name": "Вся Россия (только удаленка)", "params": "&area=113&schedule=remote", "enabled": True},
         ],
         "experience": ["between1And3", "between3And6", "moreThan6"],
     },
@@ -317,7 +320,14 @@ class Settings:
 
     @property
     def regions(self) -> list[dict]:
+        """Все настроенные регионы — для экрана управления (Фильтры)."""
         return self.data["search"]["regions"]
+
+    @property
+    def active_regions(self) -> list[dict]:
+        """Только включённые — то, по чему агент реально ходит в этом сеансе.
+        Старые записи без ключа "enabled" (до этой настройки) считаются включёнными."""
+        return [r for r in self.data["search"]["regions"] if r.get("enabled", True)]
 
     @property
     def experience(self) -> list[str]:

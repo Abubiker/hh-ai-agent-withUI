@@ -291,6 +291,7 @@ class AgentBridge:
                 await sinks.notify("🤖 Агент запущен. " + control.duration_text())
 
                 while not control.should_stop():
+                    fresh_before = client.stats.fresh
                     try:
                         await client.search_and_apply(sinks.notify)
                         await client.check_chats(sinks.notify)
@@ -300,8 +301,16 @@ class AgentBridge:
                     if control.should_stop():
                         break
                     pause = settings.cycle_pause_minutes
-                    self._log(f"😴 Круг закончен. Жду {pause} мин до следующего.")
+                    next_at = _time.strftime("%H:%M", _time.localtime(_time.time() + pause * 60))
+                    if client.stats.fresh == fresh_before:
+                        self._log(f"Новых вакансий не появилось. Следующая проверка в {next_at}.")
+                    else:
+                        self._log(f"Проверка закончена: новых вакансий {client.stats.fresh - fresh_before}, "
+                                  f"следующая в {next_at}.")
+                    # Отдельное событие для обратного отсчёта в интерфейсе
+                    self._emit("pause", {"seconds": pause * 60})
                     await control.sleep_or_stop(pause * 60)
+                    self._emit("pause", None)
             except Exception:
                 self._log(traceback.format_exc(), "error")
             finally:
@@ -415,6 +424,19 @@ class AgentBridge:
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def get_areas(self):
+        """Справочник регионов hh.ru для модалки выбора. При недоступном API
+        (не-РФ сеть отдаёт 403) интерфейс переключается на ручной ввод."""
+        import hh_api
+        try:
+            areas, source = self._submit(hh_api.fetch_areas()).result(timeout=15)
+            return {"ok": True, "areas": areas, "source": source,
+                    "schedules": hh_api.SCHEDULES}
+        except Exception as e:
+            import hh_api as _h
+            return {"ok": False, "areas": [], "source": "none",
+                    "schedules": _h.SCHEDULES, "error": str(e)}
 
     def open_ollama_app(self):
         """Открывает приложение Ollama — используется в баннере «модель не отвечает»."""

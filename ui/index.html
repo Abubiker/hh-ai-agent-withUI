@@ -369,6 +369,39 @@
   </div>
 </div>
 
+<!-- ==================== РЕГИОН ==================== -->
+<div class="overlay" id="regionModalBox">
+  <div class="modal" style="width:520px">
+    <div class="modal-head">
+      <div class="icon-box" style="background:color-mix(in srgb, var(--accent) 14%, transparent);color:var(--accent)"><i data-icon="pin15"></i></div>
+      <div class="text">
+        <div class="title" id="regionModalTitle">Добавить регион</div>
+        <div class="desc">Регион и график из справочника hh.ru — параметры ссылки соберутся сами.</div>
+      </div>
+    </div>
+    <div id="areaSearchWrap" class="col" style="gap:7px">
+      <div class="field-label">Регион</div>
+      <input type="text" id="areaSearch" placeholder="Начните вводить: Москва, Казань…">
+      <div id="areaResults" class="area-results"></div>
+    </div>
+    <div id="areaManual" class="col" style="display:none;gap:12px">
+      <div class="hint">Справочник hh.ru сейчас недоступен — можно указать регион вручную.</div>
+      <label class="field"><span class="field-label">Название</span><input type="text" id="manualName" placeholder="Москва"></label>
+      <label class="field"><span class="field-label">Параметры ссылки</span><input type="text" id="manualParams" class="mono" placeholder="&amp;area=1"></label>
+    </div>
+    <div class="col" style="gap:7px">
+      <div class="field-label">График</div>
+      <div class="chips" id="scheduleChips"></div>
+    </div>
+    <div class="row" style="align-items:center">
+      <div class="hint mono" id="regionPreview"></div>
+      <div class="spacer" style="flex:1"></div>
+      <button class="btn" id="regionModalCancel">Отмена</button>
+      <button class="btn btn-primary" id="regionModalSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // Режим предпросмотра для дизайнера: index.html?mock=1 (или ?mock=notready)
 // в обычном браузере. Требуется явный параметр — в приложении его никогда

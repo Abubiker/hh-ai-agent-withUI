@@ -114,7 +114,9 @@ async def agent_loop():
     await client.sinks.notify("🤖 ИИ-агент запущен и начал работу!\n" + control.duration_text())
 
     try:
+        import time as _time
         while not control.should_stop():
+            fresh_before = client.stats.fresh
             try:
                 await client.search_and_apply(client.sinks.notify)
                 await client.check_chats(client.sinks.notify)
@@ -124,10 +126,15 @@ async def agent_loop():
             if control.should_stop():
                 break
 
-            print(f"😴 Круг закончен. Новых вакансий пока нет — жду "
-                  f"{settings.cycle_pause_minutes} мин и проверю снова "
-                  f"(можно остановить в любой момент).")
-            await control.sleep_or_stop(settings.cycle_pause_minutes * 60)
+            pause = settings.cycle_pause_minutes
+            next_at = _time.strftime("%H:%M", _time.localtime(_time.time() + pause * 60))
+            if client.stats.fresh == fresh_before:
+                print(f"Новых вакансий не появилось. Следующая проверка в {next_at} "
+                      f"(остановить можно в любой момент).")
+            else:
+                print(f"Проверка закончена: новых вакансий "
+                      f"{client.stats.fresh - fresh_before}. Следующая в {next_at}.")
+            await control.sleep_or_stop(pause * 60)
     finally:
         await finish(client)
 

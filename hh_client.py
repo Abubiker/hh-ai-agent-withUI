@@ -131,6 +131,11 @@ class HHClient:
         self.context = None
         self.page = None
         self.stats = Stats()
+        # Память на сеанс: какие вакансии уже встречались (для раннего обрыва
+        # пагинации на повторных проверках) и о каких пропусках уже сообщали
+        # (чтобы не спамить лог одними и теми же строками каждую проверку).
+        self._seen_ids = set()
+        self._skip_logged = set()
         # Получатели уведомлений. Нужны в том числе для ввода капчи: её может
         # принять окно приложения или Telegram, смотря что настроено.
         if sinks is None:
@@ -227,9 +232,9 @@ class HHClient:
                 await handle_vpn_check(self.page)
                 page_num = 1
                 while True:
-                    print(f"📄 Парсим страницу {page_num} по запросу '{query}' ({config['name']})...")
+                    print(f"📄 Смотрю страницу {page_num} по запросу '{query}' ({config['name']})...")
                     vacancies = await self.page.locator('a[data-qa="serp-item__title"]').all()
-                
+
                     # Собираем ссылки заранее, чтобы избежать ошибки Detached Node при долгом парсинге
                     links_to_process = []
                     for v in vacancies:
@@ -237,16 +242,30 @@ class HHClient:
                         title = await v.inner_text()
                         if href:
                             links_to_process.append((title, href))
-                        
+
+                    # Сколько на этой странице вакансий, которых мы ещё не видели.
+                    # Выдача отсортирована по дате публикации, поэтому если новых
+                    # нет — дальше листать бессмысленно, там только более старые.
+                    new_on_page = 0
+
                     for title, href in links_to_process:
                         # Парсим ID вакансии из URL (https://hh.ru/vacancy/123456?...)
                         job_id = None
                         if "vacancy/" in href:
                             job_id = href.split("vacancy/")[1].split("?")[0]
-                    
+
                         if not job_id or database.is_job_applied(job_id):
-                            # print(f"Пропускаем (уже обработано): {title}") # Раскомментировать, если нужно видеть все пропуски
                             continue
+
+                        # Вакансия встречена впервые за сеанс — даже если её сейчас
+                        # отсеет стоп-фильтр, страница считается «свежей» и пагинация
+                        # продолжится: релевантные новые могут быть глубже. На повторных
+                        # проверках уже виденное не считается — страницы без новинок
+                        # обрываются сразу.
+                        if job_id not in self._seen_ids:
+                            self._seen_ids.add(job_id)
+                            self.stats.fresh += 1
+                            new_on_page += 1
 
                         if control.should_stop():
                             print("⏹️ Получен сигнал остановки — прерываю поиск.")
@@ -256,10 +275,13 @@ class HHClient:
                         # хватает, а загрузка вакансии стоит ~4 секунды на каждую.
                         hit = find_stop_word(title)
                         if hit:
-                            self.stats.hard_skipped += 1
-                            print(f"⏩ Пропускаем (Неподходящий грейд/профессия — '{hit}'): {title}")
-                            # В базу НЕ пишем: проверка названия бесплатная, зато правки
-                            # списка стоп-слов подействуют и на уже виденные вакансии.
+                            # В базу не пишем (правки стоп-слов должны действовать и на
+                            # уже виденные вакансии), но и не спамим одной и той же
+                            # строкой каждую проверку — только при первой встрече.
+                            if job_id not in self._skip_logged:
+                                self._skip_logged.add(job_id)
+                                self.stats.hard_skipped += 1
+                                print(f"⏩ Пропускаю (не тот грейд/профессия — '{hit}'): {title}")
                             continue
 
                         self.stats.viewed += 1
@@ -455,21 +477,26 @@ class HHClient:
                         finally:
                             await page.close()
                     
+                    # Выдача отсортирована по дате публикации: если на странице не было
+                    # ни одной невиданной вакансии, глубже — только ещё более старые.
+                    # Обрываем пагинацию и не тратим время на пустые страницы.
+                    if new_on_page == 0:
+                        break
+
                     # Лимит страниц на запрос, чтобы успеть пройтись по всем запросам
                     # из настроек, а не закопаться в первом же.
                     if page_num >= settings.max_pages_per_query:
-                        print(f"📑 Разобрано {page_num} стр. — лимит на запрос, иду дальше.")
+                        print(f"📑 Просмотрено {page_num} стр. — лимит на запрос, иду дальше.")
                         break
 
                     # После того как все вакансии на странице обработаны, проверяем кнопку "Дальше"
                     next_btn = self.page.locator('a[data-qa="pager-next"]')
                     if await next_btn.count() > 0 and await next_btn.is_visible():
-                        print("➡️ Переходим на следующую страницу...")
+                        print("➡️ Перехожу на следующую страницу...")
                         await next_btn.click()
                         await asyncio.sleep(4)
                         page_num += 1
                     else:
-                        print("🛑 Больше страниц нет, переходим к следующему запросу.")
                         break
 
     async def check_chats(self, send_notification_func):

@@ -78,7 +78,7 @@ function collect() {
       title_only: hasClass("titleOnlySwitch", "on"),
       max_pages_per_query: parseInt($("maxPagesVal").textContent, 10) || 2,
       regions,
-      experience: [...document.querySelectorAll(".exp:checked")].map(c => c.value),
+      experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),
     },
     schedule: { cycle_pause_minutes: parseInt($("pauseVal").textContent, 10) || 10 },
     llm: {
@@ -93,7 +93,8 @@ function collect() {
       desktop_enabled: hasClass("desktopSwitch", "on"),
       telegram_enabled: hasClass("telegramSwitch", "on"),
       tg_user_id: $("tgUserId").value.trim(),
-      events: Object.fromEntries([...document.querySelectorAll(".ev")].map(c => [c.dataset.ev, c.checked])),
+      events: Object.fromEntries([...document.querySelectorAll("#eventsList .check")]
+        .map(c => [c.dataset.ev, c.classList.contains("checked")])),
     },
     security: { use_keychain: hasClass("keychainSwitch", "on") },
     _secrets: {
@@ -151,17 +152,35 @@ function updateSummaryCount() {
 function renderQueryChips() {
   state._queries = state._queries || state.settings.search.queries.slice();
   const box = $("queryChips");
+  // prompt() в нативном WKWebView не работает, поэтому добавление — инлайн:
+  // кнопка «Добавить» превращается в поле ввода прямо в ряду чипов.
   box.innerHTML = state._queries.map((q, i) =>
-    `<div class="chip">${esc(q)}<button data-i="${i}">${ICON.remove11}</button></div>`).join("")
-    + `<button class="chip-add" id="btnAddQuery">${ICON.plus12} Добавить</button>`;
+    `<div class="chip">${esc(q)}<button data-i="${i}" title="Убрать запрос">${ICON.remove11}</button></div>`).join("")
+    + `<button class="chip-add" id="btnAddQuery">${ICON.plus12} Добавить</button>`
+    + `<input id="newQueryInput" class="chip-input" placeholder="Например: QA инженер" style="display:none">`;
   box.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => {
     state._queries.splice(+b.dataset.i, 1);
     renderQueryChips(); updateQueriesInfo(); scheduleSave();
   });
+  const input = $("newQueryInput");
   $("btnAddQuery").onclick = () => {
-    const v = prompt("Новый поисковый запрос, например «QA инженер»:");
-    if (v && v.trim()) { state._queries.push(v.trim()); renderQueryChips(); updateQueriesInfo(); scheduleSave(); }
+    $("btnAddQuery").style.display = "none";
+    input.style.display = "";
+    input.focus();
   };
+  const commit = () => {
+    const v = input.value.trim();
+    if (v && !state._queries.includes(v)) {
+      state._queries.push(v);
+      scheduleSave();
+    }
+    renderQueryChips(); updateQueriesInfo();
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") commit();
+    if (e.key === "Escape") renderQueryChips();
+  });
+  input.addEventListener("blur", commit);
 }
 
 function totalPages() {
@@ -182,23 +201,13 @@ const EXP_LABELS = [["noExperience", "Нет опыта"], ["between1And3", "1�
 function renderExperience() {
   const chosen = new Set(state.settings.search.experience);
   $("expList").innerHTML = EXP_LABELS.map(([v, label]) => `
-    <label class="check-line"><span class="check${chosen.has(v) ? " checked" : ""}" data-v="${v}">${ICON.checkTick11}</span><span class="t">${label}</span></label>
+    <div class="check-line"><span class="check${chosen.has(v) ? " checked" : ""}" data-v="${v}">${ICON.checkTick11}</span><span class="t">${label}</span></div>
   `).join("");
-  $("expList").querySelectorAll(".check").forEach(c => {
-    c.onclick = () => { c.classList.toggle("checked"); scheduleSave(); };
-    // отдаём чекбоксу класс .exp с value через искусственный <input>, чтобы collect() мог их найти
+  // кликабельна вся строка, не только квадратик
+  $("expList").querySelectorAll(".check-line").forEach(line => line.onclick = () => {
+    line.querySelector(".check").classList.toggle("checked");
+    scheduleSave();
   });
-  // виртуальные input.exp для совместимости с collect()
-  let box = $("expInputs");
-  if (!box) { box = document.createElement("div"); box.id = "expInputs"; box.style.display = "none"; document.body.appendChild(box); }
-  box.innerHTML = EXP_LABELS.map(([v]) => `<input type="checkbox" class="exp" value="${v}">`).join("");
-  const sync = () => {
-    $("expList").querySelectorAll(".check").forEach((c, i) => {
-      box.children[i].checked = c.classList.contains("checked");
-    });
-  };
-  $("expList").querySelectorAll(".check").forEach(c => c.addEventListener("click", sync));
-  sync();
 }
 
 function stepperWire(name, {min, max, step = 1, fmt}) {
@@ -221,37 +230,151 @@ function regionBadge(params) {
   return /schedule=remote/.test(params) ? "Только удалённка" : "Любой график";
 }
 
+const SCHEDULE_LABELS = {
+  "": "Любой график", remote: "Только удалёнка", fullDay: "Полный день",
+  flexible: "Гибкий график", shift: "Сменный график",
+};
+
+function scheduleOf(params) {
+  const m = /schedule=([a-zA-Z]+)/.exec(params || "");
+  return m ? m[1] : "";
+}
+
 function renderRegions() {
   state._regions = state._regions || state.settings.search.regions.map(r => ({ ...r }));
   const box = $("regionCards");
+  const single = state._regions.length <= 1;
   box.innerHTML = state._regions.map((r, i) => {
-    const remote = /schedule=remote/.test(r.params);
+    const sched = scheduleOf(r.params);
     return `<div class="region-card">
-      <span class="icon">${remote ? ICON.globe15 : ICON.pin15}</span>
+      <span class="icon">${sched === "remote" ? ICON.globe15 : ICON.pin15}</span>
       <div class="text"><div class="t">${esc(r.name)}</div>
-        <div class="d">${remote ? `<span class="badge">Только удалённка</span>` : "Любой график"}</div></div>
+        <div class="d">${sched ? `<span class="badge">${SCHEDULE_LABELS[sched] || sched}</span>` : "Любой график"}</div></div>
       <div class="spacer"></div>
       <div class="actions">
         <button data-e="${i}">Изменить</button>
-        <button class="rm" data-r="${i}">${ICON.remove11}</button>
+        ${single ? "" : `<button class="rm" data-r="${i}" title="Убрать регион">${ICON.remove11}</button>`}
       </div>
     </div>`;
   }).join("");
-  box.querySelectorAll("[data-e]").forEach(b => b.onclick = () => {
-    const i = +b.dataset.e, r = state._regions[i];
-    const name = prompt("Название региона:", r.name);
-    if (name === null) return;
-    const params = prompt("Параметры ссылки hh.ru (например &area=1 или &area=113&schedule=remote):", r.params);
-    if (params === null) return;
-    state._regions[i] = { name: name.trim() || r.name, params: params.trim() };
-    renderRegions(); updateRegionsCount(); updateQueriesInfo(); scheduleSave();
-  });
+  box.querySelectorAll("[data-e]").forEach(b => b.onclick = () => openRegionModal(+b.dataset.e));
   box.querySelectorAll("[data-r]").forEach(b => b.onclick = () => {
-    if (state._regions.length <= 1) { alert("Должен остаться хотя бы один регион."); return; }
     state._regions.splice(+b.dataset.r, 1);
     renderRegions(); updateRegionsCount(); updateQueriesInfo(); scheduleSave();
   });
 }
+
+/* ---------- модалка региона (со справочником hh.ru) ---------- */
+
+let areasCache = null;   // {areas, source, schedules} — грузится один раз
+
+async function loadAreas() {
+  if (areasCache) return areasCache;
+  areasCache = await api().get_areas();
+  return areasCache;
+}
+
+function openRegionModal(index) {
+  // index === undefined — добавление нового
+  const editing = index !== undefined ? state._regions[index] : null;
+  state._regionModal = {
+    index,
+    name: editing ? editing.name.replace(/\s*\(.*\)$/, "") : "",
+    areaId: (/area=(\d+)/.exec(editing?.params || "") || [])[1] || "",
+    schedule: scheduleOf(editing?.params),
+  };
+  $("regionModalTitle").textContent = editing ? "Изменить регион" : "Добавить регион";
+  $("areaSearch").value = state._regionModal.name;
+  $("areaResults").innerHTML = "";
+  $("regionModalBox").classList.add("show");
+  renderScheduleChips();
+  updateRegionPreview();
+
+  loadAreas().then(r => {
+    const manual = !r.areas || !r.areas.length;
+    $("areaManual").style.display = manual ? "" : "none";
+    $("areaSearchWrap").style.display = manual ? "none" : "";
+    if (manual) {
+      $("manualName").value = editing ? editing.name : "";
+      $("manualParams").value = editing ? editing.params : "";
+    } else if (state._regionModal.name) {
+      filterAreas(state._regionModal.name);
+    }
+  });
+  setTimeout(() => $("areaSearch").focus(), 60);
+}
+
+function filterAreas(q) {
+  const query = (q || "").trim().toLowerCase();
+  const box = $("areaResults");
+  if (!query || !areasCache?.areas?.length) { box.innerHTML = ""; return; }
+  const hits = areasCache.areas.filter(a => a.name.toLowerCase().includes(query)).slice(0, 20);
+  box.innerHTML = hits.map(a =>
+    `<div class="area-hit${a.id === state._regionModal.areaId ? " active" : ""}" data-id="${a.id}" data-name="${esc(a.name)}">
+      <span>${esc(a.name)}</span>${a.parent ? `<span class="parent">${esc(a.parent)}</span>` : ""}
+    </div>`).join("");
+  box.querySelectorAll(".area-hit").forEach(el => el.onclick = () => {
+    state._regionModal.areaId = el.dataset.id;
+    state._regionModal.name = el.dataset.name;
+    $("areaSearch").value = el.dataset.name;
+    filterAreas(el.dataset.name);
+    updateRegionPreview();
+  });
+}
+
+function renderScheduleChips() {
+  const scheds = areasCache?.schedules ||
+    Object.entries(SCHEDULE_LABELS).map(([id, name]) => ({ id, name }));
+  $("scheduleChips").innerHTML = scheds.map(s =>
+    `<button class="sched-chip${s.id === state._regionModal.schedule ? " active" : ""}" data-id="${s.id}">${esc(s.name)}</button>`).join("");
+  $("scheduleChips").querySelectorAll("button").forEach(b => b.onclick = () => {
+    state._regionModal.schedule = b.dataset.id;
+    renderScheduleChips();
+    updateRegionPreview();
+  });
+}
+
+function regionModalResult() {
+  const m = state._regionModal;
+  const manual = $("areaManual").style.display !== "none";
+  if (manual) {
+    const name = $("manualName").value.trim();
+    const params = $("manualParams").value.trim();
+    return name && params ? { name, params } : null;
+  }
+  if (!m.areaId) return null;
+  const schedTag = m.schedule ? ` (${SCHEDULE_LABELS[m.schedule] || m.schedule})` : "";
+  return {
+    name: m.name + schedTag,
+    params: `&area=${m.areaId}` + (m.schedule ? `&schedule=${m.schedule}` : ""),
+  };
+}
+
+function updateRegionPreview() {
+  const r = regionModalResult();
+  $("regionPreview").textContent = r ? r.params : "выберите регион из списка";
+  $("regionModalSave").disabled = !r;
+}
+
+$("areaSearch").addEventListener("input", () => {
+  state._regionModal.areaId = "";  // текст меняли — прежний выбор недействителен
+  filterAreas($("areaSearch").value);
+  updateRegionPreview();
+});
+["manualName", "manualParams"].forEach(id =>
+  $(id).addEventListener("input", updateRegionPreview));
+
+$("regionModalSave").onclick = () => {
+  const r = regionModalResult();
+  if (!r) return;
+  const i = state._regionModal.index;
+  if (i !== undefined) state._regions[i] = r;
+  else state._regions.push(r);
+  $("regionModalBox").classList.remove("show");
+  renderRegions(); updateRegionsCount(); updateQueriesInfo(); scheduleSave();
+};
+$("regionModalCancel").onclick = () => $("regionModalBox").classList.remove("show");
+$("btnAddRegion").onclick = () => openRegionModal(undefined);
 
 function updateRegionsCount() {
   const n = state._regions.length;
@@ -281,21 +404,48 @@ async function refreshModelList() {
   const box = $("modelList");
   if (!r.ok || !r.models.length) { box.innerHTML = ""; return; }
   box.innerHTML = r.models.map(m => `
-    <div class="model-row">
+    <div class="model-row" data-row="${esc(m.name)}">
       <span class="check-icon">${m.in_use ? ICON.checkTick11 : ""}</span>
       <div class="name${m.in_use ? "" : " dim"}">${esc(m.name)}</div>
       ${m.in_use ? `<div class="tag">используется</div>` : ""}
       <div class="spacer"></div>
       <div class="size">${m.size_gb} ГБ</div>
-      ${m.in_use ? "" : `<button class="del" data-m="${esc(m.name)}">Удалить</button>`}
+      ${m.in_use ? "" : `<button class="use" data-m="${esc(m.name)}">Использовать</button>
+      <button class="del" data-m="${esc(m.name)}">Удалить</button>`}
     </div>`).join("");
+
+  box.querySelectorAll(".use").forEach(b => b.onclick = () => useModel(b.dataset.m));
+
+  // confirm() в нативном WKWebView не работает — подтверждение двухшаговое:
+  // первый клик меняет кнопку на «Точно удалить?», второй (за 3 секунды) удаляет.
   box.querySelectorAll(".del").forEach(b => b.onclick = async () => {
-    if (!confirm(`Удалить модель «${b.dataset.m}»?`)) return;
-    b.disabled = true;
+    if (!b.classList.contains("confirm")) {
+      b.classList.add("confirm");
+      b.textContent = "Точно удалить?";
+      b._t = setTimeout(() => { b.classList.remove("confirm"); b.textContent = "Удалить"; }, 3000);
+      return;
+    }
+    clearTimeout(b._t);
+    b.disabled = true; b.textContent = "Удаляю…";
     const r2 = await api().delete_model(b.dataset.m);
-    if (!r2.ok) alert("Не удалось удалить: " + r2.error);
+    if (!r2.ok) {
+      const row = box.querySelector(`[data-row="${CSS.escape(b.dataset.m)}"]`);
+      if (row) row.insertAdjacentHTML("afterend",
+        `<div class="model-row"><div class="name dim" style="color:var(--err)">Не удалось удалить: ${esc(r2.error || "")}</div></div>`);
+    }
     await refreshModelList(); await refreshModels();
   });
+}
+
+async function useModel(name) {
+  // Смена активной модели: сразу сохраняем (без debounce) и обновляем всё,
+  // что показывает текущую модель — селект, список, подпись в сайдбаре.
+  $("ollamaModel").innerHTML = `<option selected>${esc(name)}</option>`;
+  await api().save_settings(collect());
+  flashSaved();
+  updateSidebarFooter();
+  await refreshModels(name);
+  await refreshModelList();
 }
 
 $("providerSeg").addEventListener("click", e => {
@@ -336,15 +486,37 @@ const EVENTS = [["applied", "Отклик отправлен"], ["reply", "От�
 function renderEvents() {
   const ev = state.settings.notifications.events || {};
   $("eventsList").innerHTML = EVENTS.map(([k, label]) => `
-    <label class="check-line"><span class="ev check${ev[k] !== false ? " checked" : ""}" data-ev="${k}">${ICON.checkTick11}</span><span class="t">${label}</span></label>
+    <div class="check-line"><span class="check${ev[k] !== false ? " checked" : ""}" data-ev="${k}">${ICON.checkTick11}</span><span class="t">${label}</span></div>
   `).join("");
-  $("eventsList").querySelectorAll(".check").forEach(c => c.onclick = () => { c.classList.toggle("checked"); scheduleSave(); });
+  $("eventsList").querySelectorAll(".check-line").forEach(line => line.onclick = () => {
+    line.querySelector(".check").classList.toggle("checked");
+    scheduleSave();
+  });
 }
 
 wireSwitch("desktopSwitch");
 wireSwitch("telegramSwitch", on => { $("tgFields").style.display = on ? "" : "none"; });
 wireSwitch("keychainSwitch");
 wireSwitch("titleOnlySwitch", () => updateQueriesInfo());
+
+// Степперы «Страниц на запрос» и «Пауза между проверками».
+// Функция была написана, но не вызвана — кнопки +/− не работали вовсе.
+stepperWire("maxPages", { min: 1, max: 10, fmt: v => String(v) });
+stepperWire("pause", { min: 5, max: 120, step: 5, fmt: v => v + " мин" });
+
+// Автосохранение всех полей ввода. Раньше слушателей не было совсем:
+// правки резюме, адресов и выбор модели в селекте молча терялись.
+document.querySelectorAll("input, textarea, select").forEach(el => {
+  if (["captchaInput", "pullName", "newQueryInput", "areaSearch",
+       "manualName", "manualParams"].includes(el.id)) return;
+  el.addEventListener("change", scheduleSave);
+  if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
+    el.addEventListener("input", scheduleSave);
+});
+$("resumeSummary").addEventListener("input", updateSummaryCount);
+
+// Смена модели в селекте обновляет и список моделей, и сайдбар
+$("ollamaModel").addEventListener("change", () => useModel($("ollamaModel").value));
 
 $("btnTestNotify").onclick = async () => {
   $("notifyStatus").textContent = "Отправляю…";
@@ -464,7 +636,7 @@ function renderFunnel(container, stats, dashes) {
 
 /* ================= журнал ================= */
 
-const IMPORTANT_RE = /Отклик отправлен|Вакансия подходит|Итоги работы|Круг закончен|Капч|VPN/i;
+const IMPORTANT_RE = /Отклик отправлен|Вакансия подходит|Итоги работы|Проверка закончена|Новых вакансий не появилось|Капч|VPN/i;
 const LOG_PATTERNS = [
   [/^✅|отправлен/i, "logOk", "ok"],
   [/^❌|отклонил/i, "logReject", "dim"],
@@ -547,13 +719,15 @@ function updateNowFromLog(text) {
   let m;
   if ((m = text.match(/^🔍 Поиск по запросу: (.+)/))) { state.now.query = m[1]; state.now.page = 1; }
   else if ((m = text.match(/^📍 Режим: (.+)/))) { state.now.region = m[1]; }
-  else if ((m = text.match(/парсим страницу (\d+)/i))) { state.now.page = +m[1]; }
+  else if ((m = text.match(/(?:парсим|смотрю) страницу (\d+)/i))) { state.now.page = +m[1]; }
   else if ((m = text.match(/^👁️ Открываем вакансию: (.+)/))) { state.now.vacancy = m[1]; state.now.phase = "viewing"; state.now.phaseAt = Date.now(); }
   else if ((m = text.match(/^✨ Вакансия подходит: (.+)/))) { state.now.vacancy = m[1]; state.now.phase = "approved"; state.now.phaseAt = Date.now(); }
   else if ((m = text.match(/^✍️ Пишу сопроводительное — (.+)/))) { state.now.vacancy = m[1]; state.now.phase = "writing"; state.now.phaseAt = Date.now(); }
   else if ((m = text.match(/^✅ Отклик отправлен: (.+)/))) { state.now.vacancy = m[1]; state.now.phase = "applied"; state.now.phaseAt = Date.now(); setTimeout(() => { if (state.now.phase === "applied") clearNow(); }, 2500); }
   else if (/^❌ ИИ отклонил|^⏩|^⏭️/.test(text)) { clearNow(); }
-  else if (/^😴 Круг закончен/.test(text)) { state.now.round++; state.now.query = null; state.now.page = null; clearNow(); }
+  else if (/^(Новых вакансий не появилось|Проверка закончена)/.test(text)) {
+    state.now.round++; state.now.query = null; state.now.page = null; clearNow();
+  }
   renderNow();
 }
 function clearNow() { state.now.phase = null; state.now.vacancy = null; renderNow(); }
@@ -567,7 +741,7 @@ function renderNow() {
   if (n.query) chips.push(n.query);
   if (n.region) chips.push(n.region);
   if (n.page) chips.push(`Страница ${n.page} из ${state.settings?.search?.max_pages_per_query || "?"}`);
-  chips.push(`Круг ${n.round + 1}`);
+  chips.push(`Проверка №${n.round + 1}`);
   $("nowChips").innerHTML = chips.map(c => `<div class="now-chip">${esc(c)}</div>`).join("");
 
   const box = $("nowBox");
@@ -621,7 +795,7 @@ function setRunningUi(running, startedAt) {
 
   $("statusDot").className = "dot" + (running ? " running" : "");
   $("statusLabel").textContent = running ? "Работает" : "Остановлен";
-  $("statusSub").textContent = running ? `Круг ${state.now.round + 1}` : (isReady() ? "Готов к запуску" : "Нужна настройка");
+  $("statusSub").textContent = running ? `Проверка №${state.now.round + 1}` : (isReady() ? "Готов к запуску" : "Нужна настройка");
 
   clearInterval(state.timerInterval);
   if (running) {
@@ -631,6 +805,7 @@ function setRunningUi(running, startedAt) {
     }, 1000);
   } else {
     clearNow();
+    setPauseCountdown(null);
   }
   updateWorkLayout();
 }
@@ -670,12 +845,33 @@ $("captchaSkip").onclick = () => sendCaptcha("");
 $("captchaInput").addEventListener("keydown", e => { if (e.key === "Enter") sendCaptcha($("captchaInput").value.trim()); });
 function sendCaptcha(text) { $("captchaBox").classList.remove("show"); api().submit_captcha(text); }
 
+/* ================= пауза между проверками ================= */
+
+let pauseTimer = null;
+
+function setPauseCountdown(seconds) {
+  clearInterval(pauseTimer);
+  const note = $("pauseNote");
+  if (!seconds) { note.innerHTML = ""; note.title = ""; return; }
+  const until = Date.now() + seconds * 1000;
+  note.title = "Пауза нужна: вакансии публикуются постепенно, а частые обходы повышают риск блокировки hh.ru";
+  const tick = () => {
+    const left = Math.max(0, until - Date.now());
+    if (left <= 0) { clearInterval(pauseTimer); note.innerHTML = ""; return; }
+    const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
+    note.innerHTML = `${ICON.timer12} Следующая проверка через ${m}:${String(s).padStart(2, "0")}`;
+  };
+  tick();
+  pauseTimer = setInterval(tick, 1000);
+}
+
 /* ================= события от Python ================= */
 
 window.onAgentEvent = (event, data) => {
   if (event === "log") addLog(data.line, data.level);
   else if (event === "state") setRunningUi(data.running, data.started_at);
   else if (event === "stats") { state.stats = data; updateWorkLayout(); }
+  else if (event === "pause") setPauseCountdown(data && data.seconds);
   else if (event === "captcha") {
     $("captchaPrompt").textContent = data.prompt || "";
     if (data.image) { $("captchaImg").src = data.image; $("captchaImg").style.display = "block"; $("captchaPlaceholder").style.display = "none"; }

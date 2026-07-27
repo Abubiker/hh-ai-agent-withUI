@@ -50,7 +50,7 @@
   const LOG = [
     ["🔍 Поиск по запросу: Тестировщик", "info"],
     ["📍 Режим: Москва (любой график)", "info"],
-    ["📄 Парсим страницу 1 по запросу 'Тестировщик' (Москва (любой график))...", "info"],
+    ["📄 Смотрю страницу 1 по запросу 'Тестировщик' (Москва (любой график))...", "info"],
     ["⏩ Пропускаем (Неподходящий грейд/профессия — 'руководитель'): Teamlead QA Engineer/ Руководитель команды тестирования в TravelTech", "info"],
     ["⏩ Пропускаем (Неподходящий грейд/профессия — '1с'): QA Engineer 1C / Тестировщик 1С", "info"],
     ["👁️ Открываем вакансию: Специалист по тестированию", "info"],
@@ -61,7 +61,7 @@
     ["🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...", "warn"],
     ["⏭️ Пропускаю (archived (по тексту страницы)): QA Engineer (Mobile)", "warn"],
     ["⚠️ Не нашёл кнопку отправки отклика: QA Engineer (ITSM)", "error"],
-    ["😴 Круг закончен. Жду 10 мин до следующего.", "info"],
+    ["Проверка закончена: новых вакансий 6, следующая в 16:41.", "info"],
   ];
 
   const ok = (extra) => Promise.resolve(Object.assign({ ok: true }, extra || {}));
@@ -96,15 +96,40 @@
       open_settings_folder: () => ok(),
       open_url: () => ok(),
       open_ollama_app: () => ok(),
+      get_areas: () => ok({
+        source: "network",
+        areas: [
+          { id: "1", name: "Москва", parent: "Россия" },
+          { id: "2", name: "Санкт-Петербург", parent: "Россия" },
+          { id: "113", name: "Россия", parent: "" },
+          { id: "4", name: "Новосибирск", parent: "Новосибирская область" },
+          { id: "88", name: "Казань", parent: "Республика Татарстан" },
+          { id: "66", name: "Нижний Новгород", parent: "Нижегородская область" },
+          { id: "3", name: "Екатеринбург", parent: "Свердловская область" },
+          { id: "104", name: "Челябинск", parent: "Челябинская область" },
+        ],
+        schedules: [
+          { id: "", name: "Любой график" },
+          { id: "remote", name: "Только удалёнка" },
+          { id: "fullDay", name: "Полный день" },
+          { id: "flexible", name: "Гибкий график" },
+          { id: "shift", name: "Сменный график" },
+        ],
+      }),
     },
   };
 
-  // Демонстрация работающего агента: журнал наполняется по одной строке
+  // Демонстрация работающего агента: журнал наполняется по одной строке,
+  // после последней — событие паузы с обратным отсчётом.
   function demo() {
     window.onAgentEvent("state", { running: true, started_at: Date.now() / 1000 - 30 });
     let i = 0;
     const t = setInterval(() => {
-      if (i >= LOG.length) { clearInterval(t); return; }
+      if (i >= LOG.length) {
+        clearInterval(t);
+        window.onAgentEvent("pause", { seconds: 600 });
+        return;
+      }
       const [line, level] = LOG[i++];
       window.onAgentEvent("log", { line, level });
       window.onAgentEvent("stats", stats);

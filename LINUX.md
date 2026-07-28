@@ -13,21 +13,32 @@
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git wl-clipboard
+sudo apt install -y python3 python3-venv python3-pip \
+                    libqt6webenginecore6 libxcb-cursor0 wl-clipboard
 ```
 
-`wl-clipboard` нужен, чтобы работала кнопка «Скопировать журнал». На X11
-вместо него подойдёт `xclip`.
+Что зачем:
+
+- `libqt6webenginecore6` — системные библиотеки для движка окна. Сам движок
+  приедет через pip, но без этих библиотек он не импортируется: не хватает
+  `libsnappy`, `libopus` и ещё нескольких. Ставить весь пакет проще, чем
+  выискивать их поштучно.
+- `libxcb-cursor0` — без него Qt не может открыть окно на X11. Ошибка при
+  этом маскируется: приложение запускается, но окна не видно.
+- `wl-clipboard` — кнопка «Скопировать журнал». На X11 вместо него `xclip`.
 
 <details>
 <summary>Fedora / Arch</summary>
 
 ```bash
 # Fedora
-sudo dnf install -y python3 python3-pip git wl-clipboard
+sudo dnf install -y python3 python3-pip qt6-qtwebengine xcb-util-cursor wl-clipboard
 # Arch
-sudo pacman -S --needed python python-pip git wl-clipboard
+sudo pacman -S --needed python python-pip qt6-webengine xcb-util-cursor wl-clipboard
 ```
+
+Проверено только на Ubuntu 24.04 — здесь названия пакетов подобраны по
+смыслу и могут отличаться.
 </details>
 
 ## 2. Распаковать код и поставить зависимости
@@ -107,17 +118,22 @@ echo 'alias hhagent="cd ~/hh-ai-agent && .venv/bin/python ui_app.py"' >> ~/.bash
 
 | Симптом | Причина и решение |
 |---|---|
-| `ModuleNotFoundError: No module named 'PyQt6'` | зависимости ставились не из `.venv` — повторите шаг 2 целиком |
-| Окно открылось пустым и белым | нет Qt WebEngine: `sudo apt install -y libxcb-cursor0 libnss3 libxkbcommon-x11-0` |
+| `ImportError: libsnappy.so.1` или `libopus.so.0` | не поставлен `libqt6webenginecore6` — вернитесь к шагу 1 |
+| `Could not load the Qt platform plugin "xcb"`, окна нет | не поставлен `libxcb-cursor0` |
+| `You must have either QT or GTK … installed` | зависимости ставились не из `.venv` — повторите шаг 2 целиком |
 | `Executable doesn't exist … chromium` | пропущен шаг 3 |
 | «Модель перестала отвечать» | `systemctl status ollama`, при необходимости `sudo systemctl start ollama` |
 | Кнопка «Скопировать журнал» молчит | не установлен `wl-clipboard` (Wayland) или `xclip` (X11) |
-| Нет иконки в трее | нормально для GNOME без расширения AppIndicator — на работу агента не влияет |
+| «Иконка в трее недоступна» | нормально для GNOME без расширения AppIndicator — на работу агента не влияет |
+| Уведомления не приходят | нужна сессия рабочего стола; по ssh их не будет, приложение об этом честно пишет при запуске |
 
-## Честно о проверке
+## Что проверено
 
-Код кроссплатформенный, платформенные ветки я проверил подстановкой
-`sys.platform` — на Linux уходят `xdg-open`, `systemctl --user start ollama`
-и `wl-copy`. Но **живьём на Linux эта сборка не запускалась**: у меня под
-рукой только macOS. Вероятнее всего споткнётесь на шаге 2 или 5 — если так,
-пришлите вывод команды целиком, поправлю.
+Установка прогнана целиком в чистой Ubuntu 24.04 (arm64): системные пакеты,
+зависимости, браузер Playwright, самопроверка и запуск окна. Окно
+открывается, интерфейс отрисовывается, вкладки на месте, браузер
+поднимается. Список пакетов из шага 1 — не догадка, а то, чего реально
+не хватало.
+
+Не проверялось: живой поиск на hh.ru с Linux и другие дистрибутивы, кроме
+Ubuntu. Если что-то пойдёт не так — пришлите вывод команды целиком.

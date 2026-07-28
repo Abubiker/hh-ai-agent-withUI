@@ -522,6 +522,29 @@ def _make_icon_image(running: bool):
     return img
 
 
+def _tray_supported() -> bool:
+    """Есть ли куда поставить иконку.
+
+    На Linux pystray без AppIndicator откатывается на голый X11, не находит
+    менеджер трея и роняет AssertionError уже в своём потоке — снаружи её
+    не поймать, в журнал летит трейсбек. Проверяем заранее.
+    """
+    if not sys.platform.startswith("linux"):
+        return True
+    try:
+        import gi
+        gi.require_version("Gtk", "3.0")
+        for lib, ver in (("AyatanaAppIndicator3", "0.1"), ("AppIndicator3", "0.1")):
+            try:
+                gi.require_version(lib, ver)
+                return True
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def build_tray(bridge):
     """Иконка в строке меню. Полноценное окно остаётся основным интерфейсом,
     отсюда — только быстрые действия."""
@@ -652,11 +675,15 @@ def main():
     # Иконку в строке меню поднимаем ДО webview.start(): на macOS она не
     # заводит свой цикл событий, а пользуется тем, который создаст интерфейс.
     tray = None
-    try:
-        tray = build_tray(bridge)
-        tray.run_detached()
-    except Exception as e:
-        print(f"ℹ️ Иконка в строке меню недоступна: {e}")
+    if _tray_supported():
+        try:
+            tray = build_tray(bridge)
+            tray.run_detached()
+        except Exception as e:
+            print(f"ℹ️ Иконка в строке меню недоступна: {e}")
+    else:
+        print("ℹ️ Иконка в трее недоступна: нет поддержки AppIndicator. "
+              "На работу агента это не влияет — пользуйтесь окном.")
 
     try:
         webview.start()  # блокирует главный поток до закрытия окна

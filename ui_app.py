@@ -430,17 +430,23 @@ class AgentBridge:
         """Копирование через системную утилиту: navigator.clipboard в WKWebView
         требует защищённого контекста и на file:// не работает."""
         import subprocess
-        try:
-            if sys.platform == "darwin":
-                cmd = ["pbcopy"]
-            elif os.name == "nt":
-                cmd = ["clip"]
-            else:
-                cmd = ["xclip", "-selection", "clipboard"]
-            subprocess.run(cmd, input=(text or "").encode("utf-8"), check=True)
-            return {"ok": True}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        if sys.platform == "darwin":
+            cmds = [["pbcopy"]]
+        elif os.name == "nt":
+            cmds = [["clip"]]
+        else:
+            # На Wayland работает wl-copy, на X11 — xclip/xsel; какой из них
+            # стоит в системе, заранее не известно, поэтому пробуем по очереди.
+            cmds = [["wl-copy"], ["xclip", "-selection", "clipboard"],
+                    ["xsel", "--clipboard", "--input"]]
+        last = "нет подходящей утилиты"
+        for cmd in cmds:
+            try:
+                subprocess.run(cmd, input=(text or "").encode("utf-8"), check=True)
+                return {"ok": True}
+            except Exception as e:
+                last = str(e)
+        return {"ok": False, "error": last}
 
     def get_areas(self):
         """Справочник регионов hh.ru для модалки выбора. При недоступном API
@@ -456,19 +462,39 @@ class AgentBridge:
                     "schedules": _h.SCHEDULES, "error": str(e)}
 
     def open_ollama_app(self):
-        """Открывает приложение Ollama — используется в баннере «модель не отвечает»."""
+        """Поднимает Ollama — используется в баннере «модель не отвечает».
+
+        На macOS это обычная программа, на Linux — служба systemd, а если
+        служба не заведена, остаётся запустить сервер самим.
+        """
+        import subprocess
         try:
             if sys.platform == "darwin":
-                os.system('open -a Ollama')
-            else:
-                return {"ok": False, "error": "доступно только на macOS"}
+                subprocess.run(["open", "-a", "Ollama"], check=True, timeout=10)
+                return {"ok": True}
+            if os.name == "nt":
+                subprocess.Popen(["ollama", "app.exe"])
+                return {"ok": True}
+            for cmd in (["systemctl", "--user", "start", "ollama"],
+                        ["systemctl", "start", "ollama"]):
+                try:
+                    if subprocess.run(cmd, timeout=15).returncode == 0:
+                        return {"ok": True}
+                except Exception:
+                    continue
+            # Службы нет — просто держим сервер, пока открыто окно.
+            subprocess.Popen(["ollama", "serve"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
     def open_settings_folder(self):
+        import subprocess
+        opener = ("open" if sys.platform == "darwin"
+                  else "explorer" if os.name == "nt" else "xdg-open")
         try:
-            os.system(f'open "{settings.path.parent}"')
+            subprocess.Popen([opener, str(settings.path.parent)])
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}

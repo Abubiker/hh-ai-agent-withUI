@@ -706,7 +706,8 @@ async function refreshSetup() {
   const loginBtn = $("btnLoginNow"); if (loginBtn) loginBtn.onclick = () => $("btnStart").click();
   const getOllama = $("btnGetOllama");
   if (getOllama) getOllama.onclick = async () => {
-    await api().open_url("https://ollama.com/download/mac");
+    // Без /mac в адресе: сайт сам покажет сборку под систему пользователя.
+    await api().open_url("https://ollama.com/download");
   };
   const startOllama = $("btnStartOllama");
   if (startOllama) startOllama.onclick = async () => {

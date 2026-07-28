@@ -6,7 +6,12 @@ aiohttp
 playwright-stealth
 keyring          # опционально: только если включить хранение в Связке ключей
 desktop-notifier
-pywebview
+
+# Окно. На macOS и Windows движок берётся из системы, на Linux его нужно
+# доставить самим: Qt выбран вместо GTK потому, что ставится готовыми
+# колёсами, а PyGObject требует компиляции и системных -dev пакетов.
+pywebview; sys_platform != "linux"
+pywebview[qt]; sys_platform == "linux"
 
 # сборка
 pyinstaller

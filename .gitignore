@@ -11,6 +11,8 @@ env/
 .idea/
 build/
 dist/
+# готовый комплект для передачи под Linux, пересобирается build_app.sh
+for linux/
 build_assets/
 *.spec.bak
 .DS_Store

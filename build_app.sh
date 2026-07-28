@@ -49,14 +49,29 @@ rm -rf "$STAGE"
 echo "==> Уборка промежуточных файлов"
 rm -rf build
 
+# Под Linux и Windows сборки нет — там запускают из исходников. Архив кладём
+# рядом с DMG, чтобы «передать другу» было одним действием, а не поиском
+# нужной ветки в git.
+SRC="dist/hh-agent-src.tar.gz"
+if git rev-parse --git-dir >/dev/null 2>&1; then
+  echo "==> Архив исходников (для Linux/Windows)"
+  git archive --format=tar.gz -o "$SRC" HEAD
+fi
+
 echo
 echo "✅ Готово"
 echo "   Приложение: $APP"
 echo "   Установщик: $DMG ($(du -sh "$DMG" | cut -f1))"
+[ -f "$SRC" ] && echo "   Исходники:  $SRC ($(du -sh "$SRC" | cut -f1)) — для Linux, см. LINUX.md"
 echo
 echo "   Устанавливать нужно ИМЕННО из $DMG"
 echo
-echo "Важно для тех, кто скачает DMG с GitHub: сборка подписана ad-hoc, а не"
+echo "Важно для тех, кому передаёте DMG: сборка подписана ad-hoc, а не"
 echo "нотаризована Apple. При первом открытии macOS скажет, что приложение"
-echo "нельзя проверить. Обход — правый клик по приложению → «Открыть», либо:"
+echo "нельзя проверить. С macOS 15 правый клик → «Открыть» этот запрет уже"
+echo "не обходит — нужно Системные настройки → Конфиденциальность и"
+echo "безопасность → «Открыть всё равно». Запасной вариант:"
 echo "   xattr -dr com.apple.quarantine \"/Applications/HH Agent.app\""
+echo
+echo "Сборка только под Apple Silicon. Друг на Intel-маке или Linux —"
+echo "передавайте $SRC и LINUX.md."

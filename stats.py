@@ -13,6 +13,7 @@ class Stats:
     applied: int = 0        # успешно отправленных откликов
     applied_no_letter: int = 0  # из них ушедших без сопроводительного
     skipped_no_letter: int = 0  # подходили, но письмо приложить не удалось
+    needs_manual: int = 0       # тест работодателя — отклик только вручную
     already: int = 0        # вакансия уже была с откликом (кнопки отклика нет)
     apply_failed: int = 0   # подходила, но откликнуться не удалось
     skipped_page: int = 0   # страница не открылась: архив, редирект, капча
@@ -29,7 +30,9 @@ class Stats:
             + (f"• ⚠️ Из них без письма: {self.applied_no_letter}\n"
                if self.applied_no_letter else "")
             + (f"• ⚠️ Пропущено — не вышло приложить письмо: {self.skipped_no_letter}\n"
-               if self.skipped_no_letter else "") +
+               if self.skipped_no_letter else "")
+            + (f"• 📝 Тест работодателя — откликнуться вручную: {self.needs_manual}\n"
+               if self.needs_manual else "") +
             f"• Уже был отклик (пропущено): {self.already}\n"
             f"• Страница не открылась (архив/капча): {self.skipped_page}\n"
             f"• ⚠️ Не удалось откликнуться: {self.apply_failed}"

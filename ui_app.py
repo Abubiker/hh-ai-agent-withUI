@@ -572,7 +572,10 @@ def selftest():
 
     loop = asyncio.new_event_loop()
     try:
-        print("bundle_id:", _bundle_id())
+        # bundle_id — понятие macOS: там от него зависит, покажет ли система
+        # уведомление. На других системах строка только сбивала бы с толку.
+        if sys.platform == "darwin":
+            print("bundle_id:", _bundle_id())
         ok, why = DesktopSink()._available()
         print("уведомления:", "доступны" if ok else f"недоступны — {why}")
         if ok:

@@ -60,6 +60,15 @@ class DesktopSink(Sink):
         self.app_name = app_name
 
     def _available(self) -> tuple[bool, str]:
+        if sys.platform.startswith("linux"):
+            # Уведомления идут через D-Bus сессии рабочего стола. По ssh или
+            # в контейнере её нет, и desktop-notifier роняет трейсбек изнутри
+            # чужой корутины — своим try/except его уже не поймать.
+            import os
+            if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+                return False, ("нет сессии D-Bus — так бывает при запуске "
+                               "по ssh или в контейнере")
+            return True, ""
         if sys.platform != "darwin":
             return True, ""
         try:

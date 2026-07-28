@@ -658,40 +658,68 @@ document.querySelectorAll(".nav-item").forEach(b => b.addEventListener("click", 
 
 /* ================= готовность / состояние экрана «Работа» ================= */
 
-const SETUP_ROWS = [
-  ["browser", "Браузер для Playwright", "установлен"],
-  ["ollama_running", "Ollama запущена", null],
-  ["logged_in", "Вход в аккаунт hh.ru", "откроется окно браузера, код придёт как обычно"],
-  ["resume", "Название резюме", "должно совпадать с заголовком на hh.ru"],
-  ["summary", "Профиль для писем", "модель пишет письма строго по этому тексту"],
-];
+// Строка про модель зависит от провайдера: облачной модели Ollama не нужна.
+function setupRows(s) {
+  const modelRow = (s && s.provider && s.provider !== "ollama")
+    ? ["model_ready", "Облачная модель", "укажите ключ и модель на вкладке «Модель»"]
+    : ["model_ready", "Ollama запущена", null];
+  return [
+    ["browser", "Браузер для Playwright", "установлен"],
+    modelRow,
+    ["logged_in", "Вход в аккаунт hh.ru", "откроется окно браузера, код придёт как обычно"],
+    ["resume", "Название резюме", "должно совпадать с заголовком на hh.ru"],
+    ["summary", "Профиль для писем", "модель пишет письма строго по этому тексту"],
+  ];
+}
 
 async function refreshSetup() {
   const s = await api().setup_status();
   if (s.error) return;
   state.setup = s;
-  const okCount = SETUP_ROWS.filter(([k]) => s[k]).length;
-  $("readyBadge").textContent = `${okCount} из ${SETUP_ROWS.length}`;
-  $("readyBadge").className = "pill " + (okCount === SETUP_ROWS.length ? "pill-ok" : "pill-warn");
+  const rows = setupRows(s);
+  const okCount = rows.filter(([k]) => s[k]).length;
+  $("readyBadge").textContent = `${okCount} из ${rows.length}`;
+  $("readyBadge").className = "pill " + (okCount === rows.length ? "pill-ok" : "pill-warn");
 
-  $("checklist").innerHTML = SETUP_ROWS.map(([k, label, hint]) => {
+  $("checklist").innerHTML = rows.map(([k, label, hint]) => {
     const ok = !!s[k];
     const icon = ok ? `<span class="icon ok">${ICON.circleOk16}</span>` : `<span class="icon warn">${ICON.circleWarn16}</span>`;
     let right = "";
-    if (k === "ollama_running") right = `<span class="status mono">${ok ? "localhost:11434" : "не запущена"}</span>`;
+    if (k === "model_ready" && s.provider === "ollama") {
+      // Не установлена и не запущена — разные беды, и чинятся по-разному.
+      right = ok ? `<span class="status mono">localhost:11434</span>`
+        : s.ollama_installed
+          ? `<button class="btn btn-primary btn-small" id="btnStartOllama">Запустить Ollama</button>`
+          : `<button class="btn btn-primary btn-small" id="btnGetOllama">Скачать Ollama</button>`;
+    }
+    else if (k === "model_ready") right = ok ? `<span class="status">готова</span>`
+      : `<button class="action" data-goto="model">Настроить${ICON.chevronRight11}</button>`;
     else if (!ok && (k === "resume" || k === "summary")) right = `<button class="action" data-goto="resume">Заполнить${ICON.chevronRight11}</button>`;
     else if (!ok && k === "logged_in") right = `<button class="btn btn-primary btn-small" id="btnLoginNow">Войти</button>`;
     else right = `<span class="status">${ok ? (hint === "установлен" ? "установлен" : "") : ""}</span>`;
-    return `<div class="check-row">${icon}<div class="text"><div class="t">${label}</div>${(!ok && hint) ? `<div class="d">${hint}</div>` : ""}</div><div class="spacer"></div>${right}</div>`;
+    const sub = (k === "model_ready" && !ok && s.model_note) ? s.model_note : (!ok ? hint : "");
+    return `<div class="check-row">${icon}<div class="text"><div class="t">${label}</div>${sub ? `<div class="d">${esc(sub)}</div>` : ""}</div><div class="spacer"></div>${right}</div>`;
   }).join("");
 
-  $("checklist").querySelectorAll("[data-goto]").forEach(b => b.onclick = () => document.querySelector('.nav-item[data-tab="resume"]').click());
+  $("checklist").querySelectorAll("[data-goto]").forEach(
+    b => b.onclick = () => document.querySelector(`.nav-item[data-tab="${b.dataset.goto}"]`).click());
   const loginBtn = $("btnLoginNow"); if (loginBtn) loginBtn.onclick = () => $("btnStart").click();
+  const getOllama = $("btnGetOllama");
+  if (getOllama) getOllama.onclick = async () => {
+    await api().open_url("https://ollama.com/download/mac");
+  };
+  const startOllama = $("btnStartOllama");
+  if (startOllama) startOllama.onclick = async () => {
+    startOllama.textContent = "Запускаю…"; startOllama.disabled = true;
+    await api().open_ollama_app();
+    // Приложению нужно несколько секунд, чтобы поднять сервер на 11434.
+    setTimeout(refreshSetup, 4000);
+  };
 
   updateWorkLayout();
 }
 
-function isReady() { return state.setup && SETUP_ROWS.every(([k]) => state.setup[k]); }
+function isReady() { return !!state.setup && setupRows(state.setup).every(([k]) => state.setup[k]); }
 
 function updateWorkLayout() {
   const running = state.running;

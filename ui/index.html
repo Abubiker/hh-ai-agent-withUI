@@ -294,22 +294,39 @@
               </div>
               <div class="col" style="gap:7px">
                 <div class="field-label">Модель<span class="spacer" style="flex:1"></span>
-                  <span class="counter" id="openaiModelCount"></span></div>
-                <!-- Список подтягивается у самого сервиса, как только есть адрес
-                     и ключ. Тумблер рядом — для сервисов, которые список не
-                     отдают, и для моделей, которых в нём почему-то нет. -->
-                <div class="row tight" id="openaiModelPicker">
-                  <input type="text" id="openaiModelFilter" placeholder="Фильтр: free, llama, gpt…" style="flex:1">
-                  <button class="btn" id="btnLoadOpenaiModels" style="height:34px;flex:none"><i data-icon="refresh12"></i> Обновить</button>
+                  <!-- Тумблер переключает одно и то же поле: список или ручной ввод. -->
+                  <span class="toggle-inline" id="openaiModeToggle">
+                    <span class="lbl on" id="lblFromList">Из списка</span>
+                    <span class="switch" id="openaiManualSwitch"><span class="knob"></span></span>
+                    <span class="lbl" id="lblManual">Вручную</span>
+                  </span>
                 </div>
-                <select class="plain mono" id="openaiModelSelect" size="7" style="width:100%"></select>
-                <label class="field" id="openaiManualWrap" style="display:none">
-                  <input type="text" id="openaiModel" class="mono" placeholder="например: deepseek/deepseek-r1:free">
-                </label>
-                <div class="check-line" id="openaiManualLine">
-                  <div class="switch" id="openaiManualSwitch"></div>
-                  <div class="text">Ввести название вручную</div>
+
+                <!-- Выпадающий список: закрытое поле показывает выбранное,
+                     по клику открывается панель с поиском. Раскрытый список
+                     на семь строк занимал пол-экрана и выглядел как заглушка. -->
+                <div class="combo" id="openaiCombo">
+                  <button type="button" class="combo-field" id="openaiComboField">
+                    <span class="val mono" id="openaiComboVal">Модель не выбрана</span>
+                    <span class="count" id="openaiModelCount"></span>
+                    <i data-icon="chevronDown"></i>
+                  </button>
+                  <div class="combo-panel" id="openaiComboPanel">
+                    <div class="combo-search">
+                      <input type="text" id="openaiModelFilter" placeholder="Поиск: free, llama, gpt…" autocomplete="off">
+                    </div>
+                    <div class="combo-list" id="openaiComboList"></div>
+                    <div class="combo-foot">
+                      <span id="openaiComboFoot"></span>
+                      <span class="spacer" style="flex:1"></span>
+                      <button class="link" id="btnLoadOpenaiModels">Обновить</button>
+                    </div>
+                  </div>
                 </div>
+
+                <input type="text" id="openaiModel" class="mono field-input" style="display:none"
+                       placeholder="например: deepseek/deepseek-r1:free">
+
                 <div class="hint" id="openaiModelHint">У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.</div>
               </div>
             </div>

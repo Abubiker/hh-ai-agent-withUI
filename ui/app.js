@@ -605,74 +605,97 @@ function syncOpenaiPicker() {
   const manual = hasClass("openaiManualSwitch", "on");
   const url = $("openaiUrl").value.trim();
   const ready = !!url && (!needsKey(url) || hasKey());
-
-  $("openaiManualWrap").style.display = manual ? "" : "none";
-  $("openaiModelPicker").style.display = manual ? "none" : "";
-  $("openaiModelSelect").style.display = manual ? "none" : "";
-
-  if (manual) { $("openaiModelHint").textContent =
-      "Название модели — как его пишет сам сервис, посимвольно."; return; }
-
-  // Блокируем только когда выбирать действительно не из чего. Если список
-  // уже загружен, гасить его нельзя: ключ после сохранения стирается из поля,
-  // и живой список выглядел бы сломанным.
   const empty = !openaiModels.length;
-  $("openaiModelSelect").disabled = empty && !ready;
-  $("openaiModelFilter").disabled = empty && !ready;
+
+  // Тумблер меняет одно поле на другое, места они занимают одинаково.
+  $("openaiCombo").style.display = manual ? "none" : "";
+  $("openaiModel").style.display = manual ? "" : "none";
+  $("lblFromList").classList.toggle("on", !manual);
+  $("lblManual").classList.toggle("on", manual);
+  if (manual) closeCombo();
+
+  // Блокируем, только когда выбирать действительно не из чего: список,
+  // загруженный раньше, гасить нельзя — ключ после сохранения стирается
+  // из поля, и живой список выглядел бы сломанным.
+  $("openaiComboField").disabled = empty && !ready;
   $("btnLoadOpenaiModels").disabled = !ready;
-  $("openaiModelHint").innerHTML = !url
-    ? "Сначала выберите сервис или впишите базовый адрес."
-    : (!ready && empty)
-      ? "Введите API-ключ — список моделей запрашивается у самого сервиса."
-      : 'У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.';
+
+  const cur = $("openaiModel").value.trim();
+  $("openaiComboVal").textContent = cur || "Модель не выбрана";
+  $("openaiComboVal").classList.toggle("empty", !cur);
+  $("openaiModelCount").textContent = openaiModels.length ? `${openaiModels.length}` : "";
+
+  $("openaiModelHint").innerHTML = manual
+    ? "Название модели — как его пишет сам сервис, посимвольно."
+    : !url ? "Сначала выберите сервис или впишите базовый адрес."
+    : (!ready && empty) ? "Введите API-ключ — список моделей запрашивается у самого сервиса."
+    : 'У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.';
 }
 
+function openCombo() {
+  if ($("openaiComboField").disabled) return;
+  $("openaiCombo").classList.add("open");
+  renderOpenaiModels();
+  $("openaiModelFilter").focus();
+  $("openaiModelFilter").select();
+}
+function closeCombo() { $("openaiCombo").classList.remove("open"); }
+
+$("openaiComboField").onclick = () =>
+  $("openaiCombo").classList.contains("open") ? closeCombo() : openCombo();
+
+// Клик мимо панели закрывает её — иначе она перекрывает кнопку «Сохранить».
+document.addEventListener("click", e => {
+  if (!e.target.closest("#openaiCombo")) closeCombo();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeCombo(); });
+
 async function loadOpenaiModels({ quiet = false } = {}) {
-  const btn = $("btnLoadOpenaiModels");
   const url = $("openaiUrl").value.trim();
   if (!url || (needsKey(url) && !hasKey())) return;
-  btn.disabled = true;
-  $("openaiModelCount").textContent = "загружаю…";
+  $("openaiComboFoot").textContent = "загружаю…";
   // Провайдер на стороне Python читает адрес и ключ из настроек, поэтому
   // перед запросом списка сохраняем то, что введено.
   await api().save_settings(collect());
   const r = await api().list_models();
-  btn.disabled = false;
   if (!r.ok || !r.models.length) {
     openaiModels = [];
-    $("openaiModelSelect").innerHTML = "";
-    $("openaiModelCount").textContent = r.error ? "список получить не удалось" : "список пуст";
     if (!quiet && r.error) toast("err", "Не удалось получить список моделей", r.error);
-    return;
+  } else {
+    openaiModels = r.models;
   }
-  openaiModels = r.models;
   renderOpenaiModels();
   syncOpenaiPicker();
 }
 
-$("btnLoadOpenaiModels").onclick = () => loadOpenaiModels();
+$("btnLoadOpenaiModels").onclick = e => { e.stopPropagation(); loadOpenaiModels(); };
 
 function renderOpenaiModels() {
   const q = $("openaiModelFilter").value.trim().toLowerCase();
   const hits = q ? openaiModels.filter(m => m.toLowerCase().includes(q)) : openaiModels;
-  const cur = $("openaiModel").value;
-  $("openaiModelSelect").innerHTML = hits.slice(0, 300)
-    .map(m => `<option${m === cur ? " selected" : ""}>${esc(m)}</option>`).join("");
-  $("openaiModelCount").textContent = q
+  const cur = $("openaiModel").value.trim();
+  const shown = hits.slice(0, 300);
+  $("openaiComboList").innerHTML = shown.length
+    ? shown.map(m => `<button type="button" class="combo-item${m === cur ? " sel" : ""}" data-m="${esc(m)}">${esc(m)}</button>`).join("")
+    : `<div class="combo-empty">${openaiModels.length ? "Ничего не найдено" : "Список пуст"}</div>`;
+  $("openaiComboFoot").textContent = q
     ? `${hits.length} из ${openaiModels.length}`
     : `${openaiModels.length} моделей`;
+  $("openaiComboList").querySelectorAll(".combo-item").forEach(b => b.onclick = () => {
+    $("openaiModel").value = b.dataset.m;
+    closeCombo();
+    syncOpenaiPicker();
+    markModelDirty();
+  });
 }
 
 $("openaiModelFilter").addEventListener("input", renderOpenaiModels);
-$("openaiModelSelect").addEventListener("change", () => {
-  $("openaiModel").value = $("openaiModelSelect").value;
-  markModelDirty();
-});
+$("openaiModelFilter").addEventListener("click", e => e.stopPropagation());
 
 wireSwitch("openaiManualSwitch", () => { syncOpenaiPicker(); markModelDirty(); });
-$("openaiManualLine").onclick = e => {
-  if (e.target.id !== "openaiManualSwitch") $("openaiManualSwitch").click();
-};
+// По подписям тоже переключаем: попасть в сам тумблер сложнее, чем в слово.
+$("lblFromList").onclick = () => { if (hasClass("openaiManualSwitch", "on")) $("openaiManualSwitch").click(); };
+$("lblManual").onclick = () => { if (!hasClass("openaiManualSwitch", "on")) $("openaiManualSwitch").click(); };
 
 // Ключ ввели — список уже можно спросить.
 $("openaiKey").addEventListener("input", () => {
@@ -681,6 +704,7 @@ $("openaiKey").addEventListener("input", () => {
   state._keyTimer = setTimeout(() => loadOpenaiModels({ quiet: true }), 700);
 });
 $("openaiUrl").addEventListener("input", syncOpenaiPicker);
+$("openaiModel").addEventListener("input", () => { syncOpenaiPicker(); });
 
 // Anthropic: список известных моделей + возможность ввести своё имя
 $("anthropicPreset").onchange = () => {
@@ -729,7 +753,7 @@ stepperWire("pause", { min: 5, max: 120, step: 5, fmt: v => v + " мин" });
 document.querySelectorAll("input, textarea, select").forEach(el => {
   if (["captchaInput", "pullName", "newQueryInput", "areaSearch",
        "manualName", "manualParams", "openaiModelFilter",
-       "openaiModelSelect", "openaiPreset", "anthropicPreset"].includes(el.id)) return;
+       "openaiPreset", "anthropicPreset"].includes(el.id)) return;
   // Вкладка «Модель» сохраняется кнопкой — см. markModelDirty().
   if (el.closest("#tab-model")) return;
   el.addEventListener("change", scheduleSave);

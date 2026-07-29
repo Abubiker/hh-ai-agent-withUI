@@ -40,6 +40,7 @@ const ICON = {
   circleWarn16: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7.1" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8v4M8 11.1v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   circleErr16: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7.1" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8v4M8 11.1v.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`,
   chevron10: `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.4 4 5 6.6 7.6 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  chevronDown: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2.6 4.4 6 8l3.4-3.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   chevronRight11: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M4.4 2.6 8 6l-3.6 3.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   dot: `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--faint);margin-right:8px"></span>`,
 };

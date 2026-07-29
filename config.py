@@ -18,9 +18,11 @@ load_dotenv()
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 TG_USER_ID = os.getenv("TG_USER_ID", "YOUR_USER_ID_HERE")
 
-# Ollama (локальная модель)
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+# Ollama (локальная модель). Пусто — значит «взять значение по умолчанию из
+# settings.py»: иначе при первом запуске сюда прописывалась llama3, которой
+# у нового пользователя нет и которая заметно слабее рекомендованной.
+OLLAMA_URL = os.getenv("OLLAMA_URL", "")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "")
 
 # Ключевые слова для поиска. Запросы намеренно узкие — только название
 # должности. Ищем ТОЛЬКО по названию вакансии (SEARCH_IN_TITLE_ONLY ниже),

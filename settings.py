@@ -217,7 +217,11 @@ class Settings:
         old_url = getattr(legacy, "OLLAMA_URL", "") or ""
         if old_url:
             llm["ollama_url"] = old_url.split("/api/")[0]
-        llm["ollama_model"] = getattr(legacy, "OLLAMA_MODEL", llm["ollama_model"])
+        # Пустое значение — не «перенеси пустоту», а «здесь ничего своего нет»:
+        # оставляем модель по умолчанию из DEFAULTS.
+        old_model = getattr(legacy, "OLLAMA_MODEL", "") or ""
+        if old_model:
+            llm["ollama_model"] = old_model
 
         tg_id = getattr(legacy, "TG_USER_ID", "") or ""
         if tg_id and not tg_id.startswith("YOUR_"):

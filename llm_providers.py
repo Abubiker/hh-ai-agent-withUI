@@ -13,6 +13,7 @@
 """
 import asyncio
 import json
+import time
 
 import aiohttp
 
@@ -33,9 +34,38 @@ class LLMProvider:
                        timeout: int = 120) -> str:
         raise NotImplementedError
 
+    # Короткий запрос для проверки связи. Отвечать модель должна одним словом,
+    # чтобы проверка не превращалась в генерацию абзаца.
+    PING_PROMPT = "Ответь ровно одним словом: ок"
+
+    async def preflight(self) -> tuple[bool, str]:
+        """Дешёвые проверки до запроса: ключ на месте, модель существует.
+        Пустая строка в успехе — значит замечаний нет."""
+        return True, ""
+
     async def health(self) -> tuple[bool, str]:
-        """(доступен, человекочитаемое описание) — для индикатора в интерфейсе."""
-        raise NotImplementedError
+        """(доступен, человекочитаемое описание) — для кнопки «Проверить».
+
+        Проверяем настоящим запросом к модели. Раньше хватало списка моделей,
+        но он врёт: модель может быть в списке и при этом не отвечать —
+        не открыта на вашем тарифе, исчерпан лимит, отозван ключ.
+        """
+        ok, why = await self.preflight()
+        if not ok:
+            return False, why
+        note = why
+        t0 = time.monotonic()
+        try:
+            answer = await self.complete(self.PING_PROMPT, deterministic=True,
+                                         timeout=45)
+        except ProviderError as e:
+            return False, str(e)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}"
+        dt = time.monotonic() - t0
+        reply = " ".join((answer or "").split())[:40] or "(пустой ответ)"
+        msg = f"Модель ответила за {dt:.1f} с: «{reply}»"
+        return True, (msg + f". {note}" if note else msg)
 
     async def list_models(self) -> list[str]:
         return []
@@ -74,7 +104,7 @@ class OllamaProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"Ollama: {e}") from e
 
-    async def health(self) -> tuple[bool, str]:
+    async def preflight(self) -> tuple[bool, str]:
         try:
             models = await self.list_models()
         except Exception as e:
@@ -83,7 +113,7 @@ class OllamaProvider(LLMProvider):
             return False, "Ollama работает, но модели не установлены."
         if self.model not in models:
             return False, f"Модель «{self.model}» не установлена. Есть: {', '.join(models[:5])}"
-        return True, f"Ollama готова, модель {self.model}"
+        return True, ""
 
     async def list_models(self) -> list[str]:
         async with aiohttp.ClientSession() as session:
@@ -202,7 +232,7 @@ class OpenAICompatProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"OpenAI-совместимый сервер: {e}") from e
 
-    async def health(self) -> tuple[bool, str]:
+    async def preflight(self) -> tuple[bool, str]:
         if not self.model:
             return False, "Не указана модель."
         try:
@@ -221,7 +251,7 @@ class OpenAICompatProvider(LLMProvider):
             return False, f"Сервер недоступен по адресу {self.base_url} ({e})"
         if models and self.model not in models:
             return False, f"Модель «{self.model}» не найдена. Есть: {', '.join(models[:5])}"
-        return True, f"Сервер отвечает, модель {self.model}"
+        return True, ""
 
     async def list_models(self) -> list[str]:
         async with aiohttp.ClientSession() as session:
@@ -272,14 +302,10 @@ class AnthropicProvider(LLMProvider):
         except Exception as e:
             raise ProviderError(f"Anthropic: {e}") from e
 
-    async def health(self) -> tuple[bool, str]:
+    async def preflight(self) -> tuple[bool, str]:
         if not self.api_key:
             return False, "Не задан API-ключ Anthropic."
-        try:
-            await self.complete("Ответь одним словом: ок", deterministic=True, timeout=30)
-            return True, f"Ключ работает, модель {self.model}"
-        except ProviderError as e:
-            return False, str(e)
+        return True, ""
 
 
 PROVIDERS = {

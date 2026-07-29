@@ -39,7 +39,7 @@ async function loadSettings() {
   setSwitch("requireLetterSwitch", s.search.require_letter !== false);
   $("exclusions").value = s.search.exclusions || "";
 
-  $("maxPagesVal").textContent = s.search.max_pages_per_query;
+  $("maxPagesVal").textContent = s.search.max_pages_per_query || "до конца";
   $("pauseVal").textContent = s.schedule.cycle_pause_minutes + " мин";
 
   renderExperience();
@@ -95,7 +95,9 @@ function collect() {
       // Пустую строку сохраняем как есть: настройки подставят список
       // по умолчанию, иначе классификатор пропускал бы вообще всё.
       exclusions: $("exclusions").value,
-      max_pages_per_query: parseInt($("maxPagesVal").textContent, 10) || 2,
+      // Пустое значение «до конца» сохраняем нулём — так его понимает агент.
+      max_pages_per_query: /^\d+$/.test($("maxPagesVal").textContent.trim())
+        ? parseInt($("maxPagesVal").textContent, 10) : 0,
       regions,
       experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),
     },
@@ -234,7 +236,9 @@ function stepperWire(name, {min, max, step = 1, fmt}) {
   const el = document.querySelector(`[data-stepper="${name}"]`);
   el.querySelectorAll("button").forEach(b => b.onclick = () => {
     const valEl = $(name + "Val");
-    let cur = parseInt(valEl.textContent, 10) || min;
+    // «до конца» — это ноль, обычный parseInt на нём даёт NaN.
+    let cur = /^\d+$/.test(valEl.textContent.trim())
+      ? parseInt(valEl.textContent, 10) : 0;
     cur = Math.max(min, Math.min(max, cur + (+b.dataset.d) * step));
     valEl.textContent = fmt(cur);
     if (name === "maxPages") { updateMaxPagesHint(); updateQueriesInfo(); }
@@ -243,7 +247,12 @@ function stepperWire(name, {min, max, step = 1, fmt}) {
 }
 
 function updateMaxPagesHint() {
-  $("maxPagesHint").textContent = `≈ ${totalPages()} страниц за круг`;
+  const lim = /^\d+$/.test($("maxPagesVal").textContent.trim())
+    ? parseInt($("maxPagesVal").textContent, 10) : 0;
+  $("maxPagesHint").textContent = lim
+    ? `≈ ${totalPages()} страниц за проверку`
+    : "Агент листает, пока встречает новые вакансии. Останавливают его "
+      + "кнопка или лимит времени сеанса.";
 }
 
 function regionBadge(params) {
@@ -525,19 +534,28 @@ $("providerSeg").addEventListener("click", e => {
 });
 
 $("btnCheck").onclick = async () => {
+  const btn = $("btnCheck");
+  btn.disabled = true;                       // запрос не мгновенный — второй клик не нужен
   $("providerStatusPill").style.display = "none";
-  $("providerStatusMsg").textContent = "Проверяю…";
-  await api().save_settings(collect());
-  const r = await api().check_provider();
-  if (r.ok) {
-    $("providerStatusPill").style.display = "inline-flex";
-    $("providerStatusPill").innerHTML = `${ICON.check12}Отвечает`;
-    $("providerStatusMsg").textContent = "";
-  } else {
-    $("providerStatusPill").style.display = "none";
-    $("providerStatusMsg").innerHTML = `<span style="color:var(--err)">${esc(r.message)}</span>`;
+  $("providerStatusMsg").textContent = "";
+  toast("wait", "Отправляю запрос к модели…");
+  try {
+    await api().save_settings(collect());    // проверяем то, что видит пользователь
+    const r = await api().check_provider();
+    if (r.ok) {
+      toast("ok", "Подключение работает", r.message);
+      $("providerStatusPill").style.display = "inline-flex";
+      $("providerStatusPill").innerHTML = `${ICON.check12}Отвечает`;
+    } else {
+      toast("err", "Подключиться не удалось", r.message);
+      $("providerStatusMsg").innerHTML = `<span style="color:var(--err)">${esc(r.message)}</span>`;
+    }
+  } catch (e) {
+    toast("err", "Проверка сорвалась", String(e));
+  } finally {
+    btn.disabled = false;
+    refreshSetup();
   }
-  refreshSetup();
 };
 $("btnRefresh").onclick = () => refreshModels();
 
@@ -625,7 +643,7 @@ wireSwitch("requireLetterSwitch");
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».
 // Функция была написана, но не вызвана — кнопки +/− не работали вовсе.
-stepperWire("maxPages", { min: 1, max: 10, fmt: v => String(v) });
+stepperWire("maxPages", { min: 0, max: 10, fmt: v => v === 0 ? "до конца" : String(v) });
 stepperWire("pause", { min: 5, max: 120, step: 5, fmt: v => v + " мин" });
 
 // Автосохранение всех полей ввода. Раньше слушателей не было совсем:
@@ -650,6 +668,23 @@ $("btnTestNotify").onclick = async () => {
   $("notifyStatus").innerHTML = `<span class="pill ${r.ok ? "pill-ok" : ""}" style="${r.ok ? "" : "color:var(--err)"}">${esc(r.message)}</span>`;
 };
 $("btnOpenFolder").onclick = () => api().open_settings_folder();
+
+
+/* ================= всплывашка о результате ================= */
+
+let toastTimer = null;
+function toast(kind, title, text = "") {
+  // kind: "ok" | "err" | "wait". Ожидание не гасим по таймеру — его сменит итог.
+  const el = $("toast");
+  el.className = "toast show " + kind;
+  $("toastTitle").textContent = title;
+  $("toastText").textContent = text;
+  $("toastText").style.display = text ? "" : "none";
+  clearTimeout(toastTimer);
+  // Успех читается за секунду, ошибку нужно успеть прочитать и скопировать.
+  if (kind === "ok") toastTimer = setTimeout(hideToast, 4000);
+}
+function hideToast() { clearTimeout(toastTimer); $("toast").classList.remove("show"); }
 
 /* ================= вкладки (сайдбар) ================= */
 
@@ -1092,3 +1127,6 @@ window.addEventListener("pywebviewready", async () => {
   setRunningUi(st.running, st.started_at ? st.started_at : null);
   addLog("Готов к работе.");
 });
+
+$("toastClose").onclick = hideToast;
+document.addEventListener("keydown", e => { if (e.key === "Escape") hideToast(); });

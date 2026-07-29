@@ -201,8 +201,10 @@ async def step_search(step=None, total=None):
     print(c("  Регионы удобнее править в окне приложения — там справочник "
             "hh.ru с поиском.", DIM))
 
+    print(c("  Страниц выдачи на запрос. 0 — листать, пока есть новые вакансии; "
+            "остановит кнопка или лимит времени сеанса.", DIM))
     s["max_pages_per_query"] = await ask_int(
-        "Страниц выдачи на запрос", s["max_pages_per_query"], 1, 10)
+        "Страниц выдачи на запрос", s["max_pages_per_query"], 0, 10)
     settings.data["schedule"]["cycle_pause_minutes"] = await ask_int(
         "Пауза между проверками, минут",
         settings.data["schedule"]["cycle_pause_minutes"], 3, 240)

@@ -293,14 +293,24 @@
                 <label class="field" style="flex:1"><span class="field-label">API-ключ</span><input type="password" id="openaiKey" placeholder="оставьте пустым — не изменится"></label>
               </div>
               <div class="col" style="gap:7px">
-                <div class="field-label">Модель<span class="spacer" style="flex:1"></span><span class="counter" id="openaiModelCount"></span></div>
-                <div class="row tight">
-                  <input type="text" id="openaiModel" class="mono" placeholder="например: deepseek/deepseek-r1:free" style="flex:1">
-                  <button class="btn" id="btnLoadOpenaiModels" style="height:34px;flex:none">Загрузить список</button>
+                <div class="field-label">Модель<span class="spacer" style="flex:1"></span>
+                  <span class="counter" id="openaiModelCount"></span></div>
+                <!-- Список подтягивается у самого сервиса, как только есть адрес
+                     и ключ. Тумблер рядом — для сервисов, которые список не
+                     отдают, и для моделей, которых в нём почему-то нет. -->
+                <div class="row tight" id="openaiModelPicker">
+                  <input type="text" id="openaiModelFilter" placeholder="Фильтр: free, llama, gpt…" style="flex:1">
+                  <button class="btn" id="btnLoadOpenaiModels" style="height:34px;flex:none"><i data-icon="refresh12"></i> Обновить</button>
                 </div>
-                <input type="text" id="openaiModelFilter" placeholder="Фильтр по списку: free, llama, gpt…" style="display:none">
-                <select class="plain mono" id="openaiModelSelect" size="7" style="display:none"></select>
-                <div class="hint">У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.</div>
+                <select class="plain mono" id="openaiModelSelect" size="7" style="width:100%"></select>
+                <label class="field" id="openaiManualWrap" style="display:none">
+                  <input type="text" id="openaiModel" class="mono" placeholder="например: deepseek/deepseek-r1:free">
+                </label>
+                <div class="check-line" id="openaiManualLine">
+                  <div class="switch" id="openaiManualSwitch"></div>
+                  <div class="text">Ввести название вручную</div>
+                </div>
+                <div class="hint" id="openaiModelHint">У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.</div>
               </div>
             </div>
             <div data-p="anthropic" class="provider-block" style="display:none">
@@ -319,6 +329,15 @@
               <label class="field" id="anthropicManualWrap" style="display:none"><span class="field-label">Имя модели</span><input type="text" id="anthropicModel" class="mono"></label>
             </div>
             <div class="hint" id="providerStatusMsg"></div>
+            <div class="hairline"></div>
+            <!-- На этой вкладке автосохранения нет: ключ и модель меняют
+                 разом, и сохранять их на каждое нажатие клавиши вредно. -->
+            <div class="row" style="align-items:center;gap:10px">
+              <div class="hint" id="modelDirtyHint">Изменений нет</div>
+              <div class="spacer" style="flex:1"></div>
+              <button class="btn" id="btnModelReset" disabled>Отменить</button>
+              <button class="btn btn-primary" id="btnModelSave" disabled>Сохранить</button>
+            </div>
           </div>
 
           <div class="card" data-p="ollama" id="ollamaExtras">

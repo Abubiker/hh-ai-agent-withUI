@@ -82,6 +82,12 @@ async function loadSettings() {
   updateSidebarFooter();
   await refreshModels(s.llm.ollama_model);
   await refreshModelList();
+
+  syncOpenaiPicker();
+  // Список тянем сразу, если сервис готов отвечать: иначе пользователь видит
+  // пустой селект и не понимает, что нужно нажать «Обновить».
+  if (s.llm.provider === "openai_compat") await loadOpenaiModels({ quiet: true });
+  resetModelDirty();
 }
 
 function collect() {
@@ -147,10 +153,18 @@ function flashSaved() {
 
 function updateSidebarFooter() {
   const llm = collect().llm;
-  const kind = { ollama: "Локальная модель", openai_compat: "OpenAI-совместимый сервер", anthropic: "Anthropic" }[llm.provider];
+  // Для облачных подписываем сервис по адресу: «OpenAI-совместимый сервер»
+  // ничего не говорит, когда сервисов пять и переключаешься между ними.
+  const preset = [...$("openaiPreset").options].find(o => o.value && o.value === llm.openai_base_url);
+  const kind = llm.provider === "ollama" ? "Локальная модель"
+    : llm.provider === "anthropic" ? "Anthropic"
+    : (preset ? preset.textContent : "OpenAI-совместимый сервер");
+  const name = llm.provider === "ollama" ? llm.ollama_model
+    : llm.provider === "anthropic" ? llm.anthropic_model : llm.openai_model;
   $("providerKind").textContent = kind;
-  $("providerName").textContent = llm.provider === "ollama" ? (llm.ollama_model || "—")
-    : llm.provider === "anthropic" ? (llm.anthropic_model || "—") : (llm.openai_model || "—");
+  $("providerName").textContent = name || "модель не выбрана";
+  $("providerName").style.color = name ? "" : "var(--warn)";
+  $("providerName").title = name || "";
 }
 
 /* ================= мелкие виджеты: переключатели/чекбоксы ================= */
@@ -530,7 +544,10 @@ async function useModel(name) {
 $("providerSeg").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   $("providerSeg").querySelectorAll("button").forEach(x => x.classList.remove("active"));
-  b.classList.add("active"); syncProviderFields(); updateSidebarFooter(); scheduleSave();
+  b.classList.add("active");
+  syncProviderFields();
+  syncOpenaiPicker();
+  markModelDirty();
 });
 
 $("btnCheck").onclick = async () => {
@@ -541,6 +558,7 @@ $("btnCheck").onclick = async () => {
   toast("wait", "Отправляю запрос к модели…");
   try {
     await api().save_settings(collect());    // проверяем то, что видит пользователь
+    resetModelDirty();                       // сохранили — помечать нечего
     const r = await api().check_provider();
     if (r.ok) {
       toast("ok", "Подключение работает", r.message);
@@ -564,27 +582,75 @@ $("btnRefresh").onclick = () => refreshModels();
 // OpenAI-совместимые сервисы: пресет заполняет базовый адрес
 $("openaiPreset").onchange = () => {
   const url = $("openaiPreset").value;
-  if (url) { $("openaiUrl").value = url; scheduleSave(); }
+  if (url) { $("openaiUrl").value = url; }
+  markModelDirty();
+  syncOpenaiPicker();
 };
 
 let openaiModels = [];   // полный список с последней загрузки
 
-$("btnLoadOpenaiModels").onclick = async () => {
+/* Список моделей доступен, только когда сервису есть что ответить: нужен
+   адрес и, у всех облачных сервисов, ключ. Локальный сервер (LM Studio,
+   llama.cpp) ключа не требует, поэтому смотрим не на сам факт ключа,
+   а на то, локальный ли адрес. */
+function needsKey(url) {
+  return !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(url || "");
+}
+function hasKey() {
+  // Либо ключ введён прямо сейчас, либо уже сохранён для этого сервиса.
+  return !!$("openaiKey").value.trim() || !!(state.settings?._secrets?.openai_api_key);
+}
+
+function syncOpenaiPicker() {
+  const manual = hasClass("openaiManualSwitch", "on");
+  const url = $("openaiUrl").value.trim();
+  const ready = !!url && (!needsKey(url) || hasKey());
+
+  $("openaiManualWrap").style.display = manual ? "" : "none";
+  $("openaiModelPicker").style.display = manual ? "none" : "";
+  $("openaiModelSelect").style.display = manual ? "none" : "";
+
+  if (manual) { $("openaiModelHint").textContent =
+      "Название модели — как его пишет сам сервис, посимвольно."; return; }
+
+  // Блокируем только когда выбирать действительно не из чего. Если список
+  // уже загружен, гасить его нельзя: ключ после сохранения стирается из поля,
+  // и живой список выглядел бы сломанным.
+  const empty = !openaiModels.length;
+  $("openaiModelSelect").disabled = empty && !ready;
+  $("openaiModelFilter").disabled = empty && !ready;
+  $("btnLoadOpenaiModels").disabled = !ready;
+  $("openaiModelHint").innerHTML = !url
+    ? "Сначала выберите сервис или впишите базовый адрес."
+    : (!ready && empty)
+      ? "Введите API-ключ — список моделей запрашивается у самого сервиса."
+      : 'У OpenRouter бесплатные модели помечены суффиксом <span class="mono">:free</span> — наберите «free» в фильтре.';
+}
+
+async function loadOpenaiModels({ quiet = false } = {}) {
   const btn = $("btnLoadOpenaiModels");
-  btn.disabled = true; btn.textContent = "Загружаю…";
-  // Сначала сохраняем: провайдер на стороне Python читает адрес и ключ из настроек
+  const url = $("openaiUrl").value.trim();
+  if (!url || (needsKey(url) && !hasKey())) return;
+  btn.disabled = true;
+  $("openaiModelCount").textContent = "загружаю…";
+  // Провайдер на стороне Python читает адрес и ключ из настроек, поэтому
+  // перед запросом списка сохраняем то, что введено.
   await api().save_settings(collect());
   const r = await api().list_models();
-  btn.disabled = false; btn.textContent = "Загрузить список";
+  btn.disabled = false;
   if (!r.ok || !r.models.length) {
-    $("openaiModelCount").textContent = r.error ? "не удалось получить список" : "список пуст";
+    openaiModels = [];
+    $("openaiModelSelect").innerHTML = "";
+    $("openaiModelCount").textContent = r.error ? "список получить не удалось" : "список пуст";
+    if (!quiet && r.error) toast("err", "Не удалось получить список моделей", r.error);
     return;
   }
   openaiModels = r.models;
-  $("openaiModelFilter").style.display = "";
-  $("openaiModelSelect").style.display = "";
   renderOpenaiModels();
-};
+  syncOpenaiPicker();
+}
+
+$("btnLoadOpenaiModels").onclick = () => loadOpenaiModels();
 
 function renderOpenaiModels() {
   const q = $("openaiModelFilter").value.trim().toLowerCase();
@@ -600,9 +666,21 @@ function renderOpenaiModels() {
 $("openaiModelFilter").addEventListener("input", renderOpenaiModels);
 $("openaiModelSelect").addEventListener("change", () => {
   $("openaiModel").value = $("openaiModelSelect").value;
-  scheduleSave();
-  updateSidebarFooter();
+  markModelDirty();
 });
+
+wireSwitch("openaiManualSwitch", () => { syncOpenaiPicker(); markModelDirty(); });
+$("openaiManualLine").onclick = e => {
+  if (e.target.id !== "openaiManualSwitch") $("openaiManualSwitch").click();
+};
+
+// Ключ ввели — список уже можно спросить.
+$("openaiKey").addEventListener("input", () => {
+  syncOpenaiPicker();
+  clearTimeout(state._keyTimer);
+  state._keyTimer = setTimeout(() => loadOpenaiModels({ quiet: true }), 700);
+});
+$("openaiUrl").addEventListener("input", syncOpenaiPicker);
 
 // Anthropic: список известных моделей + возможность ввести своё имя
 $("anthropicPreset").onchange = () => {
@@ -652,6 +730,8 @@ document.querySelectorAll("input, textarea, select").forEach(el => {
   if (["captchaInput", "pullName", "newQueryInput", "areaSearch",
        "manualName", "manualParams", "openaiModelFilter",
        "openaiModelSelect", "openaiPreset", "anthropicPreset"].includes(el.id)) return;
+  // Вкладка «Модель» сохраняется кнопкой — см. markModelDirty().
+  if (el.closest("#tab-model")) return;
   el.addEventListener("change", scheduleSave);
   if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
     el.addEventListener("input", scheduleSave);
@@ -685,6 +765,66 @@ function toast(kind, title, text = "") {
   if (kind === "ok") toastTimer = setTimeout(hideToast, 4000);
 }
 function hideToast() { clearTimeout(toastTimer); $("toast").classList.remove("show"); }
+
+
+/* ================= вкладка «Модель»: явное сохранение ================= */
+
+/* Автосохранение здесь мешает: провайдер, адрес, ключ и модель меняют
+   пачкой, а промежуточные состояния бессмысленны — сохранённый ключ без
+   модели или адрес без ключа. Поэтому на этой вкладке сохраняем по кнопке. */
+
+function modelSnapshot() {
+  const c = collect();
+  return JSON.stringify({
+    llm: c.llm,
+    manual: hasClass("openaiManualSwitch", "on"),
+    // Ключи в снимок кладём как факт ввода, а не значением.
+    keyTyped: !!($("openaiKey").value.trim() || $("anthropicKey").value.trim()),
+  });
+}
+
+function markModelDirty() {
+  const dirty = modelSnapshot() !== state._modelSaved;
+  $("btnModelSave").disabled = !dirty;
+  $("btnModelReset").disabled = !dirty;
+  $("modelDirtyHint").textContent = dirty ? "Есть несохранённые изменения" : "Изменений нет";
+  $("modelDirtyHint").style.color = dirty ? "var(--warn)" : "";
+  updateSidebarFooter();
+}
+
+function resetModelDirty() {
+  state._modelSaved = modelSnapshot();
+  markModelDirty();
+}
+
+$("btnModelSave").onclick = async () => {
+  const btn = $("btnModelSave");
+  btn.disabled = true;
+  const r = await api().save_settings(collect());
+  if (!r.ok) { toast("err", "Не удалось сохранить", r.error || ""); btn.disabled = false; return; }
+  // Ключ ушёл в хранилище — поле очищаем, дальше оно значит «не менять».
+  $("openaiKey").value = ""; $("anthropicKey").value = "";
+  state.settings = await api().get_settings();
+  $("openaiKey").placeholder = state.settings._secrets.openai_api_key
+    ? "сохранён — оставьте пустым" : "оставьте пустым — не изменится";
+  resetModelDirty();
+  flashSaved();
+  toast("ok", "Настройки модели сохранены");
+  refreshSetup();
+};
+
+$("btnModelReset").onclick = async () => {
+  await loadSettings();
+  resetModelDirty();
+};
+
+// Любое изменение на этой вкладке помечает её как несохранённую.
+document.querySelectorAll("#tab-model input, #tab-model select").forEach(el => {
+  if (["pullName", "openaiModelFilter"].includes(el.id)) return;
+  el.addEventListener("change", markModelDirty);
+  if (el.tagName === "TEXTAREA" || ["text", "password"].includes(el.type))
+    el.addEventListener("input", markModelDirty);
+});
 
 /* ================= вкладки (сайдбар) ================= */
 

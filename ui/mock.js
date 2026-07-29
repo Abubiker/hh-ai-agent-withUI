@@ -85,7 +85,13 @@
   window.pywebview = {
     api: {
       get_settings: () => Promise.resolve(JSON.parse(JSON.stringify(settings))),
-      save_settings: () => ok({ path: "~/Library/Application Support/HHAgent/settings.json" }),
+      // Ведём себя как настоящее приложение: сохранённый ключ дальше виден
+      // только фактом наличия, само значение назад не отдаётся.
+      save_settings: (d) => {
+        if (d && d._secrets && d._secrets.openai_api_key) settings._secrets.openai_api_key = true;
+        if (d && d.llm) Object.assign(settings.llm, d.llm);
+        return ok({ path: "~/Library/Application Support/HHAgent/settings.json" });
+      },
       get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
       setup_status: () => Promise.resolve(setup),
       list_models: () => {

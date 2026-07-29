@@ -34,6 +34,8 @@
       anthropic_model: "claude-sonnet-5",
     },
     notifications: {
+      // Значение вымышленное: файл лежит в публичном репозитории, настоящий
+      // id из него любой желающий смог бы написать владельцу в Telegram.
       desktop_enabled: true, telegram_enabled: true, tg_user_id: "100000001",
       events: { applied: true, reply: true, captcha: true, summary: true, error: true },
     },

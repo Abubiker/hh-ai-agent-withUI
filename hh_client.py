@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import asyncio
 import random
 from playwright.async_api import async_playwright
@@ -22,6 +23,10 @@ CAPTCHA_FILE = str(user_file("captcha.png"))
 # Без предела вакансия возвращалась бы в обработку на каждом проходе выдачи,
 # каждый раз тратя полный цикл модели.
 MAX_RESPONSE_ATTEMPTS = 3
+
+# Сколько ждать поле сопроводительного письма. Форма отклика — модалка
+# с анимацией, поле подъезжает не сразу.
+LETTER_FIELD_TIMEOUT = 10.0
 
 
 class SkipVacancy(Exception):
@@ -271,9 +276,31 @@ async def dump_textareas(page, title: str = ""):
               f"ctx={ta['ctx'][:80] or '—'}")
 
 
+async def wait_letter_field(page, timeout: float = LETTER_FIELD_TIMEOUT,
+                            verbose: bool = False):
+    """Ждёт появления поля письма, а не снимает мгновенный снимок страницы.
+
+    Форма отклика открывается модалкой с анимацией, и поле письма нередко
+    подъезжает через секунду-другую после выбора резюме. Разовая проверка
+    попадала в это окно и решала, что поля нет вовсе, — вакансия уходила
+    в пропуск с «не удалось приложить письмо», хотя поле просто ещё
+    не отрисовалось.
+    """
+    deadline = time.monotonic() + timeout
+    field = await find_letter_field(page, verbose=verbose)
+    while field is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.3)
+        field = await find_letter_field(page)
+    if field is not None and verbose:
+        waited = timeout - max(0.0, deadline - time.monotonic())
+        if waited > 0.5:
+            print(f"   поле письма появилось через {waited:.1f} с")
+    return field
+
+
 async def open_letter_field(page, verbose: bool = True):
     """Раскрывает поле письма, если оно спрятано за кнопкой, и возвращает его."""
-    field = await find_letter_field(page, verbose=verbose)
+    field = await wait_letter_field(page, verbose=verbose)
     if field:
         return field
 
@@ -283,8 +310,7 @@ async def open_letter_field(page, verbose: bool = True):
             toggle = page.locator(selector).first
             if await toggle.is_visible(timeout=800):
                 await toggle.click()
-                await asyncio.sleep(1.2)
-                field = await find_letter_field(page, verbose=verbose)
+                field = await wait_letter_field(page, verbose=verbose)
                 if field:
                     return field
         except Exception:
@@ -922,9 +948,8 @@ class HHClient:
 
             print("✍️ Досылаю сопроводительное после отклика…")
             await link.click()
-            await asyncio.sleep(1)
 
-            field = await find_letter_field(page)
+            field = await wait_letter_field(page)
             if field is None:
                 # Здесь письмо отправляется как сообщение в чат отклика
                 field = page.locator('textarea:visible').first

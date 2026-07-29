@@ -236,11 +236,18 @@
               <div class="card-title">Опыт работы</div>
               <div class="checklist" id="expList"></div>
             </div>
-            <div class="card" style="flex:1;min-width:0">
+            <div class="card" style="flex:1;min-width:0;overflow:auto">
               <div class="card-title-row"><div class="card-title">Где искать</div><div class="hint" id="regionsCount" style="margin-left:auto"></div></div>
               <div style="display:flex;flex-direction:column;gap:10px" id="regionCards"></div>
               <button class="region-add" id="btnAddRegion"><i data-icon="plus12"></i> Добавить регион</button>
               <div class="hint">Регион и график выбираются из списка — технические параметры ссылки агент подставляет сам.</div>
+
+              <div class="hairline"></div>
+              <label class="field">
+                <span class="field-label">Когда отклонять вакансию</span>
+                <textarea id="exclusions" style="min-height:150px" placeholder="По одной причине на строку…"></textarea>
+                <div class="hint">Списком, по причине на строку. ИИ отклоняет вакансию, только если что-то из этого прямо написано в описании; во всём остальном — откликается. Пустое поле вернёт список по умолчанию.</div>
+              </label>
             </div>
           </div>
         </div>

@@ -37,6 +37,7 @@ async function loadSettings() {
   renderQueryChips();
   setSwitch("titleOnlySwitch", !!s.search.title_only);
   setSwitch("requireLetterSwitch", s.search.require_letter !== false);
+  $("exclusions").value = s.search.exclusions || "";
 
   $("maxPagesVal").textContent = s.search.max_pages_per_query;
   $("pauseVal").textContent = s.schedule.cycle_pause_minutes + " мин";
@@ -91,6 +92,9 @@ function collect() {
       queries: state._queries || [],
       title_only: hasClass("titleOnlySwitch", "on"),
       require_letter: hasClass("requireLetterSwitch", "on"),
+      // Пустую строку сохраняем как есть: настройки подставят список
+      // по умолчанию, иначе классификатор пропускал бы вообще всё.
+      exclusions: $("exclusions").value,
       max_pages_per_query: parseInt($("maxPagesVal").textContent, 10) || 2,
       regions,
       experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),

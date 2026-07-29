@@ -132,15 +132,28 @@ function collect() {
   };
 }
 
+// Вкладка «Модель» сохраняется своей явной кнопкой (см. markModelDirty/
+// btnModelSave), а не общим автосохранением. collect() всегда читает её
+// поля из живого DOM, поэтому обычный автосейв с ЛЮБОЙ другой вкладки
+// (или даже кнопки на этой же вкладке типа «Отправить тестовое») тайком
+// утаскивал бы в файл недописанный ключ или непереключённого провайдера,
+// хотя пользователь ещё не нажал «Сохранить». Здесь эти поля вырезаются.
+function collectWithoutModel() {
+  const data = collect();
+  delete data.llm;
+  delete data._secrets.openai_api_key;
+  delete data._secrets.anthropic_api_key;
+  return data;
+}
+
 function scheduleSave() {
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
-    const r = await api().save_settings(collect());
+    const r = await api().save_settings(collectWithoutModel());
     if (r.ok) {
       $("settingsPath").textContent = r.path;
       flashSaved();
     }
-    updateSidebarFooter();
   }, 500);
 }
 
@@ -152,7 +165,10 @@ function flashSaved() {
 }
 
 function updateSidebarFooter() {
-  const llm = collect().llm;
+  // Из СОХРАНЁННОГО состояния, а не из живых полей: вкладка «Модель»
+  // сохраняется явной кнопкой, и подпись в сайдбаре не должна дёргаться
+  // при простом переключении вкладок/провайдера до нажатия «Сохранить».
+  const llm = (state.settings && state.settings.llm) || {};
   // Для облачных подписываем сервис по адресу: «OpenAI-совместимый сервер»
   // ничего не говорит, когда сервисов пять и переключаешься между ними.
   const preset = [...$("openaiPreset").options].find(o => o.value && o.value === llm.openai_base_url);
@@ -542,6 +558,10 @@ async function useModel(name) {
   // что показывает текущую модель — селект, список, подпись в сайдбаре.
   $("ollamaModel").innerHTML = `<option selected>${esc(name)}</option>`;
   await api().save_settings(collect());
+  // Сайдбар читает state.settings, а не живые поля — держим их в курсе,
+  // иначе следующее markModelDirty() ложно решило бы, что есть несохранённое.
+  state.settings.llm = collect().llm;
+  resetModelDirty();
   flashSaved();
   updateSidebarFooter();
   await refreshModels(name);
@@ -565,7 +585,9 @@ $("btnCheck").onclick = async () => {
   toast("wait", "Отправляю запрос к модели…");
   try {
     await api().save_settings(collect());    // проверяем то, что видит пользователь
+    state.settings.llm = collect().llm;      // сайдбар читает state.settings, не поля
     resetModelDirty();                       // сохранили — помечать нечего
+    updateSidebarFooter();
     const r = await api().check_provider();
     if (r.ok) {
       toast("ok", "Подключение работает", r.message);
@@ -717,7 +739,9 @@ $("openaiModel").addEventListener("input", () => { syncOpenaiPicker(); });
 $("anthropicPreset").onchange = () => {
   const v = $("anthropicPreset").value;
   $("anthropicManualWrap").style.display = v ? "none" : "";
-  if (v) { $("anthropicModel").value = v; scheduleSave(); updateSidebarFooter(); }
+  // Вкладка «Модель» сохраняется явной кнопкой — этот выбор был единственным
+  // местом на вкладке, которое ещё сохраняло само, в обход «Сохранить».
+  if (v) { $("anthropicModel").value = v; markModelDirty(); }
   else $("anthropicModel").focus();
 };
 $("btnPull").onclick = async () => {
@@ -776,7 +800,7 @@ $("ollamaModel").addEventListener("change", () => useModel($("ollamaModel").valu
 
 $("btnTestNotify").onclick = async () => {
   $("notifyStatus").textContent = "Отправляю…";
-  await api().save_settings(collect());
+  await api().save_settings(collectWithoutModel());
   const r = await api().test_notification();
   $("notifyStatus").innerHTML = `<span class="pill ${r.ok ? "pill-ok" : ""}" style="${r.ok ? "" : "color:var(--err)"}">${esc(r.message)}</span>`;
 };
@@ -902,7 +926,9 @@ function markModelDirty() {
   $("btnModelReset").disabled = !dirty;
   $("modelDirtyHint").textContent = dirty ? "Есть несохранённые изменения" : "Изменений нет";
   $("modelDirtyHint").style.color = dirty ? "var(--warn)" : "";
-  updateSidebarFooter();
+  // Сайдбар сюда не трогаем: он должен показывать сохранённое состояние,
+  // а эта функция вызывается на каждое движение по вкладке, включая
+  // переключение провайдера ещё до нажатия «Сохранить».
 }
 
 function resetModelDirty() {
@@ -921,6 +947,7 @@ $("btnModelSave").onclick = async () => {
   $("openaiKey").placeholder = state.settings._secrets.openai_api_key
     ? "сохранён — оставьте пустым" : "оставьте пустым — не изменится";
   resetModelDirty();
+  updateSidebarFooter();
   flashSaved();
   toast("ok", "Настройки модели сохранены");
   refreshSetup();
@@ -1281,7 +1308,7 @@ function setRunningUi(running, startedAt) {
 $("btnStart").onclick = async () => {
   try {
     $("errorBanner").style.display = "none";
-    await api().save_settings(collect());
+    await api().save_settings(collectWithoutModel());
     const r = await api().start_agent(+$("duration").value);
     if (r && !r.ok) showErrorBanner("Не удалось запустить", r.error || "неизвестная ошибка");
   } catch (e) {

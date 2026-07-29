@@ -168,7 +168,10 @@ class OpenAICompatProvider(LLMProvider):
         cfg = settings.data["llm"]
         self.base_url = (base_url or cfg["openai_base_url"]).rstrip("/")
         self.model = model or cfg["openai_model"]
-        self.api_key = api_key if api_key is not None else settings.get_secret("openai_api_key")
+        # Ключ ищем по адресу сервиса: у Groq, Mistral и OpenRouter они разные,
+        # и общий на всех означал бы, что переключение стирает предыдущий.
+        self.api_key = (api_key if api_key is not None
+                        else settings.get_scoped_secret("openai_api_key", self.base_url))
 
     def _headers(self) -> dict:
         h = {"Content-Type": "application/json"}

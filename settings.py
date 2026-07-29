@@ -263,6 +263,27 @@ class Settings:
         tmp.replace(p)
         os.chmod(p, 0o600)
 
+    @staticmethod
+    def scoped_secret_name(base_name: str, url: str) -> str:
+        """Имя секрета, привязанное к сервису.
+
+        Ключ у OpenAI-совместимых сервисов был один на всех: настроил Groq,
+        переключился на Mistral — ключ Groq затёрт, и обратно уже не вернуться
+        без повторного ввода. Привязываем к хосту адреса.
+        """
+        from urllib.parse import urlparse
+        host = (urlparse(url).hostname or "").lower()
+        return f"{base_name}@{host}" if host else base_name
+
+    def get_scoped_secret(self, base_name: str, url: str) -> str:
+        """Ключ сервиса, с откатом на общий — он остался у тех, кто настраивал
+        приложение до разделения ключей."""
+        return (self.get_secret(self.scoped_secret_name(base_name, url))
+                or self.get_secret(base_name))
+
+    def set_scoped_secret(self, base_name: str, url: str, value: str):
+        self.set_secret(self.scoped_secret_name(base_name, url), value)
+
     def get_secret(self, name: str) -> str:
         if name in self._secret_cache:
             return self._secret_cache[name]

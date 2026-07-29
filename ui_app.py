@@ -134,7 +134,10 @@ class AgentBridge:
         data["_secrets"] = {
             "tg_bot_token": bool(settings.get_secret("tg_bot_token")),
             "anthropic_api_key": bool(settings.get_secret("anthropic_api_key")),
-            "openai_api_key": bool(settings.get_secret("openai_api_key")),
+            # Для OpenAI-совместимых ключ свой у каждого сервиса — показываем
+            # наличие того, что относится к выбранному сейчас адресу.
+            "openai_api_key": bool(settings.get_scoped_secret(
+                "openai_api_key", settings.data["llm"]["openai_base_url"])),
         }
         return data
 
@@ -142,8 +145,16 @@ class AgentBridge:
         try:
             secrets = incoming.pop("_secrets", None) or {}
             incoming.pop("_secrets", None)
+            # Адрес сервиса берём из этого же сохранения: пользователь мог
+            # сменить его и ввести ключ одним действием.
+            base_url = (incoming.get("llm") or {}).get(
+                "openai_base_url") or settings.data["llm"]["openai_base_url"]
             for key, value in secrets.items():
-                if value:  # пустое поле означает «не менять»
+                if not value:  # пустое поле означает «не менять»
+                    continue
+                if key == "openai_api_key":
+                    settings.set_scoped_secret(key, base_url, value)
+                else:
                     settings.set_secret(key, value)
             for section, values in incoming.items():
                 if section in settings.data and isinstance(values, dict):

@@ -121,7 +121,7 @@ async def step_model(step=None, total=None):
                                   else await ask("Базовый адрес", llm["openai_base_url"]))
         key = await ask("API-ключ (пусто — оставить прежний)")
         if key:
-            settings.set_secret("openai_api_key", key)
+            settings.set_scoped_secret("openai_api_key", llm["openai_base_url"], key)
         settings.save()  # ключ нужен провайдеру уже сейчас, для списка моделей
         llm["openai_model"] = await _pick_model(llm.get("openai_model", ""))
 

@@ -157,9 +157,33 @@ def _install_sigint_handler(loop):
         pass  # на некоторых платформах add_signal_handler недоступен
 
 
+async def ensure_configured() -> bool:
+    """Не даём запуститься вслепую.
+
+    Без названия резюме и профиля агент отработает вхолостую: письма писать
+    не из чего, а резюме для отклика не выбрать. Раньше это выяснялось уже
+    в процессе, отдельными ошибками по каждой вакансии.
+    """
+    import wizard
+
+    if settings.target_resume_name and settings.resume_summary.strip():
+        return True
+
+    print("\n⚙️ Похоже, агент ещё не настроен: нет названия резюме "
+          "или профиля для писем.")
+    if not await wizard.ask_yes("Пройти настройку сейчас?", default=True):
+        print("Настроить можно в любой момент: python wizard.py")
+        return False
+    await wizard.run()
+    return bool(settings.target_resume_name and settings.resume_summary.strip())
+
+
 async def main():
     init_db()
     print("Инициализация завершена.")
+
+    if not await ensure_configured():
+        return
 
     await ask_telegram()
     await ask_duration()

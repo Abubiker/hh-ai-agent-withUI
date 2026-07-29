@@ -100,7 +100,7 @@
 
           <!-- состояние: готово, остановлен, есть данные сеанса -->
           <div id="stateIdle" class="row" style="display:none">
-            <div class="card metric-hero" style="width:264px;flex:none">
+            <div class="card metric-hero" style="flex:0 1 264px;min-width:200px">
               <div class="label">Откликов отправлено</div>
               <div class="value" id="heroApplied">0</div>
               <div class="note"><span class="dot"></span><span id="heroNote">Всё готово к запуску</span></div>
@@ -123,7 +123,7 @@
 
           <!-- вторая строка: воронка (если не idle) + журнал -->
           <div class="row" style="flex:1;min-height:0" id="secondRow">
-            <div class="card" id="funnelCardSecond" style="width:340px;flex:none"></div>
+            <div class="card" id="funnelCardSecond"></div>
             <div class="card log-card" style="flex:1;min-width:0">
               <div class="log-toolbar">
                 <div class="card-title">Журнал</div>
@@ -232,7 +232,7 @@
           </div>
 
           <div class="row" style="flex:1;min-height:0">
-            <div class="card" style="width:300px;flex:none">
+            <div class="card" style="flex:0 1 300px;min-width:230px">
               <div class="card-title">Опыт работы</div>
               <div class="checklist" id="expList"></div>
             </div>
@@ -283,6 +283,7 @@
                   <select class="plain" id="openaiPreset">
                     <option value="">Свой адрес</option>
                     <option value="https://openrouter.ai/api/v1">OpenRouter</option>
+                    <option value="https://api.mistral.ai/v1">Mistral</option>
                     <option value="https://api.groq.com/openai/v1">Groq</option>
                     <option value="http://localhost:1234/v1">LM Studio</option>
                     <option value="https://api.openai.com/v1">OpenAI</option>
@@ -373,7 +374,7 @@
                 <div class="hint" id="notifyStatus"></div>
               </div>
             </div>
-            <div class="card" style="width:322px;flex:none">
+            <div class="card" style="flex:0 1 322px;min-width:260px">
               <div class="card-title">О чём сообщать</div>
               <div class="checklist" id="eventsList"></div>
             </div>
@@ -388,7 +389,7 @@
                   <div class="d">Сейчас токены лежат в файле с правами только для вас. Связка надёжнее, но будет просить пароль после каждого обновления приложения.</div></div>
               </div>
             </div>
-            <div class="card" style="width:322px;flex:none">
+            <div class="card" style="flex:0 1 322px;min-width:260px">
               <div class="card-title">Файл настроек</div>
               <div class="mono hint" id="settingsPath" style="word-break:break-all"></div>
               <div class="spacer" style="flex:1"></div>

@@ -146,9 +146,20 @@ class OllamaProvider(LLMProvider):
             raise ProviderError(f"Не удалось скачать модель: {e}") from e
 
 
+# Готовые адреса OpenAI-совместимых сервисов. Список общий для окна и для
+# мастера в терминале, чтобы они не разъезжались.
+OPENAI_PRESETS = [
+    ("OpenRouter", "https://openrouter.ai/api/v1", "есть бесплатные модели, ключ обязателен"),
+    ("Mistral", "https://api.mistral.ai/v1", "ключ обязателен"),
+    ("Groq", "https://api.groq.com/openai/v1", "быстрый, ключ обязателен"),
+    ("LM Studio", "http://localhost:1234/v1", "локально, ключ не нужен"),
+    ("OpenAI", "https://api.openai.com/v1", "ключ обязателен"),
+]
+
+
 class OpenAICompatProvider(LLMProvider):
-    """Покрывает LM Studio, llama.cpp server, LocalAI, Groq, OpenAI — всё,
-    что говорит по протоколу /v1/chat/completions."""
+    """Покрывает LM Studio, llama.cpp server, LocalAI, Groq, Mistral, OpenAI —
+    всё, что говорит по протоколу /v1/chat/completions."""
 
     name = "openai_compat"
 
@@ -194,6 +205,16 @@ class OpenAICompatProvider(LLMProvider):
         try:
             models = await self.list_models()
         except Exception as e:
+            # «401 Unauthorized» формально верно, но человеку ничего не говорит:
+            # почти всегда это забытый или неверный ключ.
+            code = getattr(e, "status", None)
+            if code in (401, 403):
+                return False, ("Сервис не принял ключ — проверьте API-ключ"
+                               + (" (для этого сервиса он обязателен)"
+                                  if not self.api_key else ""))
+            if code == 404:
+                return False, (f"По адресу {self.base_url} нет метода /models — "
+                               "проверьте, что адрес заканчивается на /v1")
             return False, f"Сервер недоступен по адресу {self.base_url} ({e})"
         if models and self.model not in models:
             return False, f"Модель «{self.model}» не найдена. Есть: {', '.join(models[:5])}"

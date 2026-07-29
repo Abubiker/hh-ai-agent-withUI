@@ -280,7 +280,10 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 /* ---------- журнал ---------- */
 
 .log-card { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 13px; }
-.log-toolbar { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+/* wrap здесь задаёт нижнюю границу ширины всей карточки журнала: пока
+   заголовок, «Скопировать» и переключатель стоят в одну строку, карточка
+   не может стать уже их суммы и выдавливает соседнюю воронку за край окна. */
+.log-toolbar { display: flex; align-items: center; gap: 10px; min-height: 30px; flex-wrap: wrap; }
 .log-toolbar .live { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim); flex: none; white-space: nowrap; }
 .log-toolbar .live .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok); animation: pulse 2s ease-in-out infinite; }
 /* Счётчик — второстепенный: не переносится и первым уходит, когда узко,
@@ -543,10 +546,29 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .model-row .use:hover { text-decoration: underline; }
 .model-row .del.confirm { color: var(--err); font-weight: 590; }
 
+/* Воронка рядом с журналом. Узкий вариант — когда агент работает: там же
+   появляется карточка «Сейчас делаю», и воронке нужно меньше места. */
+#funnelCardSecond { flex: 0 1 340px; min-width: 240px; }
+#funnelCardSecond.narrow { flex-basis: 288px; }
+
 /* ---------- утилиты ---------- */
-.row { display: flex; gap: 16px; }
+/* wrap обязателен: без него карточки с заданной шириной не помещаются в узкое
+   окно и распирают страницу горизонтальной прокруткой вместо переноса. */
+.row { display: flex; gap: 16px; flex-wrap: wrap; }
 .row.tight { gap: 10px; }
 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+
+/* Порог не на глаз: журналу нужно минимум 425px по содержимому, воронке 340,
+   плюс отступ и боковое меню — вдвоём они помещаются примерно с 1085px.
+   Ниже ряды складываются в колонку. */
+@media (max-width: 1100px) {
+  .content { padding: 22px 20px; }
+  .row > .card { flex-basis: 100% !important; }
+  /* Ряд «воронка + журнал» тянется на всю высоту, и при переносе журнал
+     должен остаться высоким, а не схлопнуться в полоску. */
+  #secondRow { flex: none; }
+  #secondRow > .log-card { min-height: 320px; }
+}
 .hairline { height: 1px; background: var(--line2); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .scroll { overflow: auto; }

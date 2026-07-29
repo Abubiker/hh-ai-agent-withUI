@@ -733,10 +733,12 @@ function updateWorkLayout() {
   $("stateIdle").style.display = (!running && ready) ? "flex" : "none";
   $("stateRunning").style.display = running ? "flex" : "none";
 
+  // Ширину задаём классом, а не пикселями в style: раньше при каждой смене
+  // состояния сюда прописывалось то 288px, то 340px, и карточка заметно
+  // дёргалась — а в узком окне ещё и не давала ряду перенестись.
   const fSecond = $("funnelCardSecond");
-  if (running) { fSecond.style.display = ""; fSecond.style.width = "288px"; }
-  else if (ready) { fSecond.style.display = "none"; }
-  else { fSecond.style.display = ""; fSecond.style.width = "340px"; }
+  fSecond.style.display = ready && !running ? "none" : "";
+  fSecond.classList.toggle("narrow", running);
 
   renderFunnel(fSecond, state.stats, !ready && !running /* dashes только пока не готово и не запущено */);
   if (ready && !running) renderFunnel($("funnelCardIdle"), state.stats, false);

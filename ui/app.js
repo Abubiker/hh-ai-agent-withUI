@@ -487,8 +487,15 @@ function syncProviderFields() {
 async function refreshModels(selected) {
   const sel = $("ollamaModel");
   const want = selected || sel.value;
-  const r = await api().list_models();
-  sel.innerHTML = (r.models || []).map(m => `<option${m === want ? " selected" : ""}>${esc(m)}</option>`).join("")
+  // list_models() отдаёт список ТЕКУЩЕГО активного провайдера (это нужно
+  // кнопке «Проверить» и т.п.), а этот селект — конкретно про Ollama. Пока
+  // активен другой провайдер, list_models() вернул бы его модели, они
+  // осели бы здесь без пометки selected, браузер выбрал бы первую из
+  // списка — и следующее любое сохранение настроек утащило бы чужое имя
+  // в ollama_model. list_models_detail() всегда именно про Ollama.
+  const r = await api().list_models_detail();
+  const names = (r.models || []).map(m => m.name);
+  sel.innerHTML = names.map(m => `<option${m === want ? " selected" : ""}>${esc(m)}</option>`).join("")
     || `<option value="${esc(want || "")}">${esc(want) || "модели не найдены"}</option>`;
 }
 
@@ -756,6 +763,8 @@ document.querySelectorAll("input, textarea, select").forEach(el => {
        "openaiPreset", "anthropicPreset"].includes(el.id)) return;
   // Вкладка «Модель» сохраняется кнопкой — см. markModelDirty().
   if (el.closest("#tab-model")) return;
+  // Чат не относится к настройкам вообще — у него свой обработчик отправки.
+  if (el.closest("#tab-chat")) return;
   el.addEventListener("change", scheduleSave);
   if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
     el.addEventListener("input", scheduleSave);
@@ -772,6 +781,86 @@ $("btnTestNotify").onclick = async () => {
   $("notifyStatus").innerHTML = `<span class="pill ${r.ok ? "pill-ok" : ""}" style="${r.ok ? "" : "color:var(--err)"}">${esc(r.message)}</span>`;
 };
 $("btnOpenFolder").onclick = () => api().open_settings_folder();
+
+/* ================= вкладка «Чат» ================= */
+
+state.chatSending = false;
+
+function renderChatBubble(role, text, opts = {}) {
+  $("chatEmpty").style.display = "none";
+  const box = $("chatMessages");
+  const div = document.createElement("div");
+  div.className = "chat-bubble " + role + (opts.error ? " error" : "");
+  const body = `<div class="text">${esc(text).replace(/\n/g, "<br>")}</div>`;
+  const retry = opts.error
+    ? `<button class="chat-retry" id="chatRetryBtn">Повторить</button>` : "";
+  div.innerHTML = body + retry;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+  if (opts.error) $("chatRetryBtn").onclick = retryChat;
+  return div;
+}
+
+function setChatStatus(text) {
+  let el = document.getElementById("chatStatusLine");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chatStatusLine";
+    el.className = "chat-typing";
+    el.innerHTML = `<span class="dot"></span><span id="chatStatusText"></span>`;
+    $("chatMessages").appendChild(el);
+  }
+  $("chatStatusText").textContent = text;
+  el.style.display = "flex";
+  $("chatMessages").scrollTop = $("chatMessages").scrollHeight;
+}
+function clearChatStatus() {
+  const el = document.getElementById("chatStatusLine");
+  if (el) el.remove();
+}
+
+function setChatSending(on) {
+  state.chatSending = on;
+  $("btnChatSend").disabled = on;
+}
+
+async function sendChatMessage() {
+  const input = $("chatInput");
+  const text = input.value.trim();
+  if (!text || state.chatSending) return;
+  input.value = "";
+  input.style.height = "auto";
+  renderChatBubble("user", text);
+  setChatSending(true);
+  setChatStatus("Печатает…");
+  const r = await api().send_chat_message(text);
+  if (!r.ok) {
+    clearChatStatus();
+    setChatSending(false);
+    renderChatBubble("assistant", r.error || "Не удалось отправить сообщение", { error: true });
+  }
+}
+
+async function retryChat() {
+  setChatSending(true);
+  setChatStatus("Печатает…");
+  await api().retry_last_chat_message();
+}
+
+$("btnChatSend").onclick = sendChatMessage;
+$("chatInput").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+});
+$("chatInput").addEventListener("input", () => {
+  const el = $("chatInput");
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 140) + "px";
+});
+$("btnChatReset").onclick = async () => {
+  await api().reset_chat();
+  $("chatMessages").innerHTML = "";
+  $("chatEmpty").style.display = "";
+};
 
 
 /* ================= всплывашка о результате ================= */
@@ -1278,6 +1367,17 @@ window.onAgentEvent = (event, data) => {
   else if (event === "pull_done") {
     if (data.ok) { $("pullStatus").textContent = "Готово: " + data.model; $("pullBar").style.width = "100%"; refreshModels(); refreshModelList(); }
     else $("pullStatus").innerHTML = `<span style="color:var(--err)">Ошибка: ${esc(data.error)}</span>`;
+  }
+  else if (event === "chat_status") setChatStatus(data.text || "Печатает…");
+  else if (event === "chat_reply") {
+    clearChatStatus();
+    setChatSending(false);
+    renderChatBubble("assistant", data.text);
+  }
+  else if (event === "chat_error") {
+    clearChatStatus();
+    setChatSending(false);
+    renderChatBubble("assistant", data.error || "Произошла ошибка", { error: true });
   }
 };
 

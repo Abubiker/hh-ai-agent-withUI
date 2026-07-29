@@ -34,6 +34,16 @@ class LLMProvider:
                        timeout: int = 120) -> str:
         raise NotImplementedError
 
+    async def chat(self, messages: list[dict], *, system: str | None = None,
+                    max_tokens: int = 2000, timeout: int = 180) -> str:
+        """Многоходовой диалог с системным промптом — для вкладки «Чат».
+
+        Отдельно от complete(): там один плоский промпт без истории и без
+        системной роли, это устраивало классификатор и генератор писем, но
+        не годится для разговора в несколько реплик.
+        """
+        raise NotImplementedError
+
     # Короткий запрос для проверки связи. Отвечать модель должна одним словом,
     # чтобы проверка не превращалась в генерацию абзаца.
     PING_PROMPT = "Ответь ровно одним словом: ок"
@@ -101,6 +111,28 @@ class OllamaProvider(LLMProvider):
                     r.raise_for_status()
                     data = await r.json()
                     return (data.get("response") or "").strip()
+        except Exception as e:
+            raise ProviderError(f"Ollama: {e}") from e
+
+    async def chat(self, messages: list[dict], *, system: str | None = None,
+                    max_tokens: int = 2000, timeout: int = 180) -> str:
+        # /api/generate не знает ни истории, ни системной роли — для диалога
+        # нужен /api/chat, единственный эндпоинт Ollama с массивом messages.
+        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        payload = {
+            "model": self.model,
+            "messages": msgs,
+            "stream": False,
+            "think": False,
+            "options": {"num_ctx": self.num_ctx, "num_predict": max_tokens},
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(f"{self.base_url}/api/chat",
+                                        json=payload, timeout=timeout) as r:
+                    r.raise_for_status()
+                    data = await r.json()
+                    return (data.get("message", {}).get("content") or "").strip()
         except Exception as e:
             raise ProviderError(f"Ollama: {e}") from e
 
@@ -209,14 +241,13 @@ class OpenAICompatProvider(LLMProvider):
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
 
-    async def complete(self, prompt: str, *, deterministic: bool = False,
-                       timeout: int = 120) -> str:
+    async def _request(self, messages: list[dict], *, temperature: float,
+                       max_tokens: int, timeout: int) -> str:
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0 if deterministic else 0.7,
-            # Классификатору хватает пары токенов, письму нужен запас.
-            "max_tokens": 16 if deterministic else 1500,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
         }
         try:
             async with aiohttp.ClientSession() as session:
@@ -231,6 +262,20 @@ class OpenAICompatProvider(LLMProvider):
             raise
         except Exception as e:
             raise ProviderError(f"OpenAI-совместимый сервер: {e}") from e
+
+    async def complete(self, prompt: str, *, deterministic: bool = False,
+                       timeout: int = 120) -> str:
+        return await self._request(
+            [{"role": "user", "content": prompt}],
+            temperature=0 if deterministic else 0.7,
+            # Классификатору хватает пары токенов, письму нужен запас.
+            max_tokens=16 if deterministic else 1500, timeout=timeout)
+
+    async def chat(self, messages: list[dict], *, system: str | None = None,
+                    max_tokens: int = 2000, timeout: int = 180) -> str:
+        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        return await self._request(msgs, temperature=0.7, max_tokens=max_tokens,
+                                   timeout=timeout)
 
     async def preflight(self) -> tuple[bool, str]:
         if not self.model:
@@ -272,16 +317,20 @@ class AnthropicProvider(LLMProvider):
         self.model = model or cfg["anthropic_model"]
         self.api_key = api_key if api_key is not None else settings.get_secret("anthropic_api_key")
 
-    async def complete(self, prompt: str, *, deterministic: bool = False,
-                       timeout: int = 120) -> str:
+    async def _request(self, messages: list[dict], *, system: str | None,
+                       temperature: float, max_tokens: int, timeout: int) -> str:
         if not self.api_key:
             raise ProviderError("Не задан API-ключ Anthropic.")
         payload = {
             "model": self.model,
-            "max_tokens": 16 if deterministic else 1500,
-            "temperature": 0 if deterministic else 1,
-            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": messages,
         }
+        # У Anthropic системный промпт — отдельное top-level поле, а не
+        # сообщение с ролью system внутри messages.
+        if system:
+            payload["system"] = system
         headers = {
             "x-api-key": self.api_key,
             "anthropic-version": self.VERSION,
@@ -301,6 +350,18 @@ class AnthropicProvider(LLMProvider):
             raise
         except Exception as e:
             raise ProviderError(f"Anthropic: {e}") from e
+
+    async def complete(self, prompt: str, *, deterministic: bool = False,
+                       timeout: int = 120) -> str:
+        return await self._request(
+            [{"role": "user", "content": prompt}], system=None,
+            temperature=0 if deterministic else 1,
+            max_tokens=16 if deterministic else 1500, timeout=timeout)
+
+    async def chat(self, messages: list[dict], *, system: str | None = None,
+                    max_tokens: int = 2000, timeout: int = 180) -> str:
+        return await self._request(messages, system=system, temperature=1,
+                                   max_tokens=max_tokens, timeout=timeout)
 
     async def preflight(self) -> tuple[bool, str]:
         if not self.api_key:
@@ -344,4 +405,28 @@ async def complete_with_retry(prompt: str, *, deterministic: bool = False,
             print(f"Ошибка обращения к модели, попытка {attempt}/{attempts}: {e}")
             if attempt < attempts:
                 await asyncio.sleep(5)
+    raise ProviderError(f"Модель не ответила после {attempts} попыток: {last}")
+
+
+async def chat_with_retry(messages: list[dict], *, system: str | None = None,
+                          max_tokens: int = 2000, timeout: int = 180,
+                          attempts: int = 2) -> str:
+    """Как complete_with_retry, но для диалога и с более коротким бэкоффом:
+    пользователь смотрит на индикатор «Печатает…», не стоит удваивать паузу.
+
+    В отличие от вызовов из ai_analyzer.py, финальная ProviderError здесь не
+    гасится — в чате её показывают пользователю как ошибку с кнопкой
+    «Повторить», а не подменяют заглушкой посреди немого автоматического цикла.
+    """
+    provider = get_provider()
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await provider.chat(messages, system=system,
+                                       max_tokens=max_tokens, timeout=timeout)
+        except ProviderError as e:
+            last = e
+            print(f"Ошибка обращения к модели (чат), попытка {attempt}/{attempts}: {e}")
+            if attempt < attempts:
+                await asyncio.sleep(2)
     raise ProviderError(f"Модель не ответила после {attempts} попыток: {last}")

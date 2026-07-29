@@ -140,6 +140,9 @@
           { id: "shift", name: "Сменный график" },
         ],
       }),
+      send_chat_message: (text) => { chatDemo(text); return ok(); },
+      retry_last_chat_message: () => { chatDemo(mockLastUserText, true); return ok(); },
+      reset_chat: () => ok(),
     },
   };
 
@@ -171,6 +174,40 @@
       }
       window.onAgentEvent("pull_progress", { status: "pulling manifest", percent: p });
     }, 300);
+  }
+
+  // Имитация ответа чата: обычный вопрос, оффтопик (отказ по системному
+  // промпту) или фейковая ссылка на резюме (статус «Читаю резюме…» перед
+  // более долгим ответом) — чтобы вкладку можно было проверить без бэкенда.
+  let mockLastUserText = "";
+  function chatDemo(text, isRetry = false) {
+    if (!isRetry) mockLastUserText = text;
+    const isResumeLink = /hh\.ru\/resume\//i.test(text);
+    const isOffTopic = /погод|рецепт|футбол/i.test(text);
+    setTimeout(() => {
+      if (isResumeLink) window.onAgentEvent("chat_status", { text: "Читаю резюме…" });
+    }, 300);
+    setTimeout(() => {
+      if (isResumeLink) {
+        window.onAgentEvent("chat_status", { text: "Анализирую…" });
+      }
+    }, 1000);
+    setTimeout(() => {
+      if (isResumeLink) {
+        window.onAgentEvent("chat_reply", { text:
+          "Резюме в целом сильное: понятная структура, есть конкретика по стеку. " +
+          "Из того, что стоит усилить — в описании последнего места мало цифр: " +
+          "добавьте конкретные метрики (сколько тест-кейсов, на сколько ускорили релизы и т.п.)." });
+      } else if (isOffTopic) {
+        window.onAgentEvent("chat_reply", { text:
+          "Я помогаю только с поиском работы: резюме, вакансии, собеседования и всё в этом духе. " +
+          "Задайте вопрос по этой теме — с радостью помогу." });
+      } else {
+        window.onAgentEvent("chat_reply", { text:
+          "Хороший вопрос. Судя по вашему профилю в настройках, стоит подчеркнуть в письме " +
+          "именно опыт с автоматизацией — это чаще всего смотрят в первую очередь." });
+      }
+    }, isResumeLink ? 1800 : 900);
   }
 
   // Показать модальное окно капчи: в консоли браузера вызвать showCaptchaDemo()

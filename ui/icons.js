@@ -6,6 +6,7 @@ const ICON = {
   navFilters: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.4 5.4h11.2M2.4 10.6h11.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="6" cy="5.4" r="1.9" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><circle cx="10.4" cy="10.6" r="1.9" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/></svg>`,
   navModel: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2.2 13.2 5v6L8 13.8 2.8 11V5L8 2.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
   navNotify: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4.6 10.8c0-.7.5-1.1.5-1.9V7.2a2.9 2.9 0 0 1 5.8 0v1.7c0 .8.5 1.2.5 1.9H4.6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M6.9 12.6h2.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+  navChat: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.6 3.6h10.8v7.2H6.6L3.6 13.2V10.8H2.6V3.6Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
 
   // действия (14×14)
   play12: `<svg width="12" height="12" viewBox="0 0 14 14"><path d="M4 2.8 11 7l-7 4.2V2.8Z" fill="currentColor"/></svg>`,

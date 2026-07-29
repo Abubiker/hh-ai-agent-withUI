@@ -83,6 +83,10 @@ class AgentBridge:
         self.started_at = None
         self._captcha_future = None
         self._stdout_backup = None
+        # История чата — только в памяти, на диск не пишется: разговор
+        # эфемерный, обнуляется при перезапуске приложения.
+        self._chat_history: list[dict] = []
+        self._chat_busy = False
 
     # ---------- служебное ----------
 
@@ -251,6 +255,75 @@ class AgentBridge:
             # Future принадлежит фоновому циклу — трогаем его только оттуда.
             self.loop.call_soon_threadsafe(fut.set_result, text or None)
         return {"ok": True}
+
+    # ---------- чат ----------
+
+    def send_chat_message(self, text: str):
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "Пустое сообщение"}
+        if self._chat_busy:
+            return {"ok": False, "error": "Дождитесь ответа на предыдущее сообщение"}
+        self._chat_history.append({"role": "user", "content": text})
+        self._submit(self._run_chat_turn())
+        return {"ok": True}
+
+    def retry_last_chat_message(self):
+        if self._chat_busy:
+            return {"ok": False, "error": "Дождитесь ответа"}
+        if not self._chat_history or self._chat_history[-1]["role"] != "user":
+            return {"ok": False, "error": "Нечего повторять"}
+        self._submit(self._run_chat_turn())
+        return {"ok": True}
+
+    def reset_chat(self):
+        self._chat_history = []
+        return {"ok": True}
+
+    async def _run_chat_turn(self):
+        """Отправляет накопленную историю модели и рассылает результат
+        событиями — ответ может занять много секунд (особенно с чтением
+        резюме), поэтому не блокирует мост, как pull_model.
+        """
+        import resume_reader
+        from chat_analyzer import build_chat_system_prompt, build_resume_turn
+        from llm_providers import chat_with_retry, ProviderError
+
+        self._chat_busy = True
+        try:
+            last_user = self._chat_history[-1]["content"]
+            turns = self._chat_history
+            max_tokens = 2000
+            resume_url = resume_reader.find_resume_url(last_user)
+
+            if resume_url:
+                self._emit("chat_status", {"text": "Читаю резюме…"})
+                try:
+                    resume_text = await resume_reader.fetch_resume_text(resume_url)
+                except resume_reader.ResumeReadError as e:
+                    self._emit("chat_error", {"error": str(e)})
+                    return
+                except Exception as e:
+                    self._emit("chat_error", {"error": f"Не удалось открыть резюме: {e}"})
+                    return
+                turns = turns[:-1] + [{
+                    "role": "user",
+                    "content": build_resume_turn(resume_url, resume_text, last_user),
+                }]
+                max_tokens = 3000  # разбору резюме нужен запас побольше обычного
+                self._emit("chat_status", {"text": "Анализирую…"})
+
+            try:
+                reply = await chat_with_retry(turns, system=build_chat_system_prompt(),
+                                              max_tokens=max_tokens, timeout=180)
+            except ProviderError as e:
+                self._emit("chat_error", {"error": str(e)})
+                return
+
+            self._chat_history.append({"role": "assistant", "content": reply})
+            self._emit("chat_reply", {"text": reply})
+        finally:
+            self._chat_busy = False
 
     # ---------- запуск и остановка ----------
 
@@ -623,7 +696,8 @@ def selftest():
         # только в момент запуска агента.
         print("\nмодули агента:")
         for mod in ("hh_client", "database", "ai_analyzer", "llm_providers",
-                    "notify_sinks", "tg_bot", "control", "playwright_stealth"):
+                    "notify_sinks", "tg_bot", "control", "playwright_stealth",
+                    "resume_reader", "chat_analyzer"):
             try:
                 __import__(mod)
                 print(f"  ✅ {mod}")

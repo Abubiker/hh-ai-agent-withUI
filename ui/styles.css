@@ -335,6 +335,18 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 .log-empty .t { font: 590 13px/1.3 -apple-system, system-ui, sans-serif; color: var(--dim); }
 .log-empty .d { font-size: 12px; line-height: 1.5; color: var(--faint); max-width: 280px; text-align: center; text-wrap: pretty; }
 
+/* ---------- чат ---------- */
+.chat-messages { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.chat-bubble { max-width: 72%; padding: 10px 13px; border-radius: var(--radius-inner); font-size: 13px; line-height: 1.5; -webkit-user-select: text; user-select: text; }
+.chat-bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
+.chat-bubble.assistant { align-self: flex-start; background: var(--surf2); color: var(--text); }
+.chat-bubble.error { border: 1px solid color-mix(in srgb, var(--err) 40%, var(--line2)); color: var(--err); }
+.chat-bubble .chat-retry { margin-top: 6px; display: block; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; font: inherit; font-size: 12px; }
+.chat-typing { display: flex; align-items: center; gap: 8px; align-self: flex-start; font-size: 12px; color: var(--faint); }
+.chat-typing .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s ease-in-out infinite; }
+.chat-input-row { display: flex; gap: 10px; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--line2); flex: none; }
+.chat-input { flex: 1; max-height: 140px; resize: none; }
+
 /* ---------- пустое состояние ---------- */
 .empty-tip { padding: 14px 16px; border-radius: var(--radius-inner); background: var(--surf2); display: flex; flex-direction: column; gap: 4px; margin-top: auto; }
 .empty-tip .t { font: 590 12.5px/1.3 -apple-system, system-ui, sans-serif; }

@@ -377,12 +377,17 @@ async def handle_vpn_check(page) -> bool:
     return False
 
 
-async def diagnose_page(page):
+async def diagnose_page(page, kind: str = "vacancy"):
     """Разбирается, почему на странице нет описания вакансии.
 
     Исходный код считал капчей ЛЮБОЕ отсутствие описания, хотя чаще это
     архивная вакансия или редирект. Возвращает (код, человекочитаемая причина).
     Код: captcha | archived | not_found | redirect | unknown
+
+    kind различает, какую страницу ждём: финальная проверка URL для вакансии
+    ищет "hh.ru/vacancy/", а для резюме — "hh.ru/resume/". Без этого параметра
+    любая успешно открывшаяся страница резюме считалась бы редиректом, потому
+    что её адрес никогда не содержит "/vacancy/".
     """
     try:
         url = page.url
@@ -409,7 +414,8 @@ async def diagnose_page(page):
             if any(w in probe for w in words):
                 return code, f"{code} (по тексту страницы)"
 
-        if "hh.ru/vacancy/" not in url:
+        url_marker = "hh.ru/vacancy/" if kind == "vacancy" else "hh.ru/resume/"
+        if url_marker not in url:
             return "redirect", f"редирект на {url[:80]}"
         return "unknown", f"описание не найдено, заголовок: {title[:60]!r}"
     except Exception as e:

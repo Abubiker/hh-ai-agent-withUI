@@ -44,6 +44,7 @@
         <button class="nav-item" data-tab="filters"><i data-icon="navFilters"></i> Фильтры</button>
         <button class="nav-item" data-tab="model"><i data-icon="navModel"></i> Модель<span class="dot-err" id="navModelErr" style="display:none"></span></button>
         <button class="nav-item" data-tab="notify"><i data-icon="navNotify"></i> Уведомления</button>
+        <button class="nav-item" data-tab="chat"><i data-icon="navChat"></i> Чат</button>
       </div>
       <div class="sidebar-footer">
         <div class="k" id="providerKind">Локальная модель</div>
@@ -430,6 +431,33 @@
               <div class="mono hint" id="settingsPath" style="word-break:break-all"></div>
               <div class="spacer" style="flex:1"></div>
               <button class="btn" id="btnOpenFolder" style="align-self:flex-start">Показать в Finder</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- ЧАТ ---------- -->
+      <section class="tab-page" id="tab-chat">
+        <div class="content" style="flex:1">
+          <div class="page-head">
+            <div class="page-head-text">
+              <h1>Чат</h1>
+              <div class="sub">Вопросы про резюме, вакансии, письма и собеседования. Можно вставить ссылку на своё резюме на hh.ru — агент откроет его и разберёт (только чтение, ничего не меняет).</div>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn btn-small" id="btnChatReset">Очистить чат</button>
+          </div>
+
+          <div class="card log-card" style="flex:1;min-height:0">
+            <div id="chatMessages" class="chat-messages"></div>
+            <div id="chatEmpty" class="log-empty">
+              <div class="t">Пока пусто</div>
+              <div class="d">Спросите что-нибудь о резюме, вакансиях или собеседованиях — или вставьте ссылку на своё резюме с hh.ru.</div>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chatInput" class="chat-input" rows="1"
+                placeholder="Спросите про резюме, вакансии, письма или собеседования…"></textarea>
+              <button class="btn btn-primary" id="btnChatSend">Отправить</button>
             </div>
           </div>
         </div>

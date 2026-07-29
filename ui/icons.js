@@ -35,6 +35,7 @@ const ICON = {
   minus11: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2.6 6h6.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
   plus12: `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2.4v7.2M2.4 6h7.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
   remove11: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
+  attach16: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.2 4.4 5.6 10a2.2 2.2 0 1 0 3.1 3.1l5.2-5.2a3.7 3.7 0 0 0-5.2-5.2L3.5 7.9a5.2 5.2 0 0 0 7.4 7.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   check12: `<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 7.4 5.6 10 11 4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   checkTick11: `<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M2.6 6.2 4.6 8.2 9 3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   circleOk16: `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7.1" stroke="currentColor" stroke-width="1.3"/><path d="M5 8.2 7 10.2l4-4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,

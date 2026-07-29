@@ -454,7 +454,13 @@
               <div class="t">Пока пусто</div>
               <div class="d">Спросите что-нибудь о резюме, вакансиях или собеседованиях — или вставьте ссылку на своё резюме с hh.ru.</div>
             </div>
+            <div class="chat-attach-preview" id="chatAttachPreview" style="display:none">
+              <img id="chatAttachThumb" alt="">
+              <button class="chat-attach-remove" id="chatAttachRemove" title="Убрать"><i data-icon="remove11"></i></button>
+            </div>
             <div class="chat-input-row">
+              <input type="file" id="chatImageInput" accept="image/*" style="display:none">
+              <button class="btn chat-attach-btn" id="btnChatAttach" title="Прикрепить скриншот"><i data-icon="attach16"></i></button>
               <textarea id="chatInput" class="chat-input" rows="1"
                 placeholder="Спросите про резюме, вакансии, письма или собеседования…"></textarea>
               <button class="btn btn-primary" id="btnChatSend">Отправить</button>

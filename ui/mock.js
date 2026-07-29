@@ -140,7 +140,7 @@
           { id: "shift", name: "Сменный график" },
         ],
       }),
-      send_chat_message: (text) => { chatDemo(text); return ok(); },
+      send_chat_message: (text, image) => { chatDemo(text, false, image); return ok(); },
       retry_last_chat_message: () => { chatDemo(mockLastUserText, true); return ok(); },
       reset_chat: () => ok(),
     },
@@ -176,14 +176,45 @@
     }, 300);
   }
 
-  // Имитация ответа чата: обычный вопрос, оффтопик (отказ по системному
-  // промпту) или фейковая ссылка на резюме (статус «Читаю резюме…» перед
-  // более долгим ответом) — чтобы вкладку можно было проверить без бэкенда.
+  // Имитация ответа чата: обычный вопрос, оффтопик, ссылка на резюме,
+  // ссылка на вакансию (с командой на отклик или без), скриншот — чтобы
+  // вкладку можно было проверить без бэкенда.
   let mockLastUserText = "";
-  function chatDemo(text, isRetry = false) {
+  function chatDemo(text, isRetry = false, image) {
     if (!isRetry) mockLastUserText = text;
     const isResumeLink = /hh\.ru\/resume\//i.test(text);
+    const isVacancyLink = /hh\.ru\/vacancy\/\d+/i.test(text);
+    const isApplyCommand = /откликнись|откликнитесь|отправ.{0,3}\s+отклик|подай.{0,3}\s+заявку|примени/i.test(text);
     const isOffTopic = /погод|рецепт|футбол/i.test(text);
+
+    if (image) {
+      setTimeout(() => window.onAgentEvent("chat_status", { text: "Смотрю на скриншот…" }), 300);
+      setTimeout(() => window.onAgentEvent("chat_reply", { text:
+        "Судя по скриншоту, это вакансия «Специалист по тестированию» — стек и грейд " +
+        "похожи на то, что указано в вашем профиле. Основное расхождение — не видно " +
+        "требований к английскому, уточните на собеседовании." }), 1400);
+      return;
+    }
+
+    if (isVacancyLink && isApplyCommand) {
+      const steps = ["Открываю вакансию…", "Пишу сопроводительное…", "Проверяю отклик…"];
+      steps.forEach((s, i) => setTimeout(() =>
+        window.onAgentEvent("chat_status", { text: s }), 400 + i * 700));
+      setTimeout(() => window.onAgentEvent("chat_reply", { text:
+        "Готово — откликнулась на «Специалист по тестированию» с сопроводительным письмом." }),
+        400 + steps.length * 700);
+      return;
+    }
+
+    if (isVacancyLink) {
+      setTimeout(() => window.onAgentEvent("chat_status", { text: "Открываю вакансию…" }), 300);
+      setTimeout(() => window.onAgentEvent("chat_status", { text: "Анализирую…" }), 1000);
+      setTimeout(() => window.onAgentEvent("chat_reply", { text:
+        "Вакансия в целом подходит: стек и грейд совпадают с профилем. Из настораживающего — " +
+        "зарплата не указана явно. Если решите откликнуться, напишите «откликнись на эту вакансию»." }), 1800);
+      return;
+    }
+
     setTimeout(() => {
       if (isResumeLink) window.onAgentEvent("chat_status", { text: "Читаю резюме…" });
     }, 300);

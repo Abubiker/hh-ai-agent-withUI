@@ -35,12 +35,17 @@ class LLMProvider:
         raise NotImplementedError
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
-                    max_tokens: int = 2000, timeout: int = 180) -> str:
+                    max_tokens: int = 2000, timeout: int = 180,
+                    images: list[str] | None = None) -> str:
         """Многоходовой диалог с системным промптом — для вкладки «Чат».
 
         Отдельно от complete(): там один плоский промпт без истории и без
         системной роли, это устраивало классификатор и генератор писем, но
         не годится для разговора в несколько реплик.
+
+        images — base64-строки (без префикса "data:...;base64,"), клеятся
+        к ПОСЛЕДНЕМУ сообщению в messages (текущая реплика пользователя).
+        None/пустой список — поведение не меняется.
         """
         raise NotImplementedError
 
@@ -115,10 +120,15 @@ class OllamaProvider(LLMProvider):
             raise ProviderError(f"Ollama: {e}") from e
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
-                    max_tokens: int = 2000, timeout: int = 180) -> str:
+                    max_tokens: int = 2000, timeout: int = 180,
+                    images: list[str] | None = None) -> str:
         # /api/generate не знает ни истории, ни системной роли — для диалога
         # нужен /api/chat, единственный эндпоинт Ollama с массивом messages.
-        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        if images:
+            # Не мутируем чужие dict-ы — они же живут в AgentBridge._chat_history.
+            msgs = list(msgs)
+            msgs[-1] = {**msgs[-1], "images": images}
         payload = {
             "model": self.model,
             "messages": msgs,
@@ -272,8 +282,21 @@ class OpenAICompatProvider(LLMProvider):
             max_tokens=16 if deterministic else 1500, timeout=timeout)
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
-                    max_tokens: int = 2000, timeout: int = 180) -> str:
-        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+                    max_tokens: int = 2000, timeout: int = 180,
+                    images: list[str] | None = None) -> str:
+        msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
+        if images:
+            # OpenAI-совместимый content — либо строка, либо список блоков
+            # {"type":"text"/"image_url"}. Картинку клеим только к последнему
+            # ходу, не трогая более раннюю историю.
+            msgs = list(msgs)
+            last = msgs[-1]
+            text = last.get("content") or ""
+            blocks = ([{"type": "text", "text": text}] if text else []) + [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b}"}}
+                for b in images
+            ]
+            msgs[-1] = {**last, "content": blocks}
         return await self._request(msgs, temperature=0.7, max_tokens=max_tokens,
                                    timeout=timeout)
 
@@ -359,8 +382,20 @@ class AnthropicProvider(LLMProvider):
             max_tokens=16 if deterministic else 1500, timeout=timeout)
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
-                    max_tokens: int = 2000, timeout: int = 180) -> str:
-        return await self._request(messages, system=system, temperature=1,
+                    max_tokens: int = 2000, timeout: int = 180,
+                    images: list[str] | None = None) -> str:
+        msgs = list(messages)
+        if images:
+            # Anthropic content — либо строка, либо список блоков
+            # {"type":"text"/"image"}; system остаётся отдельным полем.
+            last = msgs[-1]
+            text = last.get("content") or ""
+            blocks = ([{"type": "text", "text": text}] if text else []) + [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b}}
+                for b in images
+            ]
+            msgs = msgs[:-1] + [{**last, "content": blocks}]
+        return await self._request(msgs, system=system, temperature=1,
                                    max_tokens=max_tokens, timeout=timeout)
 
     async def preflight(self) -> tuple[bool, str]:
@@ -410,7 +445,7 @@ async def complete_with_retry(prompt: str, *, deterministic: bool = False,
 
 async def chat_with_retry(messages: list[dict], *, system: str | None = None,
                           max_tokens: int = 2000, timeout: int = 180,
-                          attempts: int = 2) -> str:
+                          attempts: int = 2, images: list[str] | None = None) -> str:
     """Как complete_with_retry, но для диалога и с более коротким бэкоффом:
     пользователь смотрит на индикатор «Печатает…», не стоит удваивать паузу.
 
@@ -423,7 +458,8 @@ async def chat_with_retry(messages: list[dict], *, system: str | None = None,
     for attempt in range(1, attempts + 1):
         try:
             return await provider.chat(messages, system=system,
-                                       max_tokens=max_tokens, timeout=timeout)
+                                       max_tokens=max_tokens, timeout=timeout,
+                                       images=images)
         except ProviderError as e:
             last = e
             print(f"Ошибка обращения к модели (чат), попытка {attempt}/{attempts}: {e}")

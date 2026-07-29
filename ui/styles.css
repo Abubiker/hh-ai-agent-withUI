@@ -346,6 +346,13 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 .chat-typing .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s ease-in-out infinite; }
 .chat-input-row { display: flex; gap: 10px; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--line2); flex: none; }
 .chat-input { flex: 1; max-height: 140px; resize: none; }
+.chat-attach-btn { width: 34px; height: 34px; padding: 0; flex: none; }
+.chat-attach-preview { display: flex; align-items: center; gap: 8px; padding: 6px 2px 0; }
+.chat-attach-preview img { height: 40px; border-radius: 6px; object-fit: cover; }
+.chat-attach-remove { width: 22px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: none; background: var(--surf2); color: var(--dim); cursor: pointer; }
+.chat-attach-remove:hover { background: var(--line); color: var(--text); }
+.chat-bubble-img { display: block; max-width: 220px; border-radius: 8px; margin-bottom: 6px; }
 
 /* ---------- пустое состояние ---------- */
 .empty-tip { padding: 14px 16px; border-radius: var(--radius-inner); background: var(--surf2); display: flex; flex-direction: column; gap: 4px; margin-top: auto; }

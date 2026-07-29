@@ -15,6 +15,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import sys
 import threading
 import traceback
@@ -67,6 +68,12 @@ class LogTee:
 
     def isatty(self):
         return False
+
+
+def _turn_text(turn: dict) -> str:
+    """Текст хода разговора, даже если к нему прикреплена картинка (ключ
+    image_b64 никак не влияет на то, что здесь возвращается)."""
+    return turn.get("content") or ""
 
 
 class AgentBridge:
@@ -235,7 +242,6 @@ class AgentBridge:
         except Exception as e:
             self._log(f"Не удалось прочитать скриншот капчи: {e}", "warn")
 
-        import re
         self._emit("captcha", {"image": image_data,
                                "prompt": re.sub(r"<[^>]+>", "", prompt)})
         try:
@@ -258,13 +264,22 @@ class AgentBridge:
 
     # ---------- чат ----------
 
-    def send_chat_message(self, text: str):
+    def send_chat_message(self, text: str, image_data_url: str | None = None):
         text = (text or "").strip()
-        if not text:
+        if not text and not image_data_url:
             return {"ok": False, "error": "Пустое сообщение"}
         if self._chat_busy:
             return {"ok": False, "error": "Дождитесь ответа на предыдущее сообщение"}
-        self._chat_history.append({"role": "user", "content": text})
+        image_b64 = None
+        if image_data_url:
+            m = re.match(r"^data:image/[^;]+;base64,(.+)$", image_data_url, re.DOTALL)
+            if not m:
+                return {"ok": False, "error": "Не удалось разобрать изображение"}
+            image_b64 = m.group(1)
+        turn = {"role": "user", "content": text or "(изображение без подписи)"}
+        if image_b64:
+            turn["image_b64"] = image_b64
+        self._chat_history.append(turn)
         self._submit(self._run_chat_turn())
         return {"ok": True}
 
@@ -283,20 +298,35 @@ class AgentBridge:
     async def _run_chat_turn(self):
         """Отправляет накопленную историю модели и рассылает результат
         событиями — ответ может занять много секунд (особенно с чтением
-        резюме), поэтому не блокирует мост, как pull_model.
+        резюме или откликом), поэтому не блокирует мост, как pull_model.
         """
         import resume_reader
-        from chat_analyzer import build_chat_system_prompt, build_resume_turn
+        import quick_apply
+        from chat_analyzer import build_chat_system_prompt, build_resume_turn, build_vacancy_turn
         from llm_providers import chat_with_retry, ProviderError
 
         self._chat_busy = True
         try:
-            last_user = self._chat_history[-1]["content"]
-            turns = self._chat_history
+            current = self._chat_history[-1]
+            last_user = _turn_text(current)
             max_tokens = 2000
-            resume_url = resume_reader.find_resume_url(last_user)
+            images = None
 
-            if resume_url:
+            # Проводной формат — плоские {role, content}: картинка живёт
+            # отдельным ключом в истории и не пересылается повторно на
+            # будущих ходах (как текст резюме/вакансии уже сегодня эфемерен).
+            turns = [{"role": t["role"], "content": t["content"]} for t in self._chat_history]
+
+            image_b64 = current.get("image_b64")
+            vacancy_url = None if image_b64 else quick_apply.find_vacancy_url(last_user)
+            resume_url = None if (image_b64 or vacancy_url) else resume_reader.find_resume_url(last_user)
+
+            if image_b64:
+                # Скриншот — показываем модели напрямую, без текстовых обёрток.
+                self._emit("chat_status", {"text": "Смотрю на скриншот…"})
+                images = [image_b64]
+
+            elif resume_url:
                 self._emit("chat_status", {"text": "Читаю резюме…"})
                 try:
                     resume_text = await resume_reader.fetch_resume_text(resume_url)
@@ -313,9 +343,52 @@ class AgentBridge:
                 max_tokens = 3000  # разбору резюме нужен запас побольше обычного
                 self._emit("chat_status", {"text": "Анализирую…"})
 
+            elif vacancy_url and quick_apply.has_apply_command(last_user):
+                # Ссылка на вакансию + явная команда — реальный отклик.
+                # Один слот капчи на всё приложение — не лезем во второй.
+                if self._captcha_future is not None:
+                    self._emit("chat_error", {
+                        "error": "Капча уже ждёт ответа — дождитесь и повторите."})
+                    return
+                try:
+                    result = await quick_apply.apply_to_vacancy(
+                        vacancy_url, ui_captcha=self._ask_captcha,
+                        captcha_busy=lambda: self._captcha_future is not None,
+                        on_status=lambda t: self._emit("chat_status", {"text": t}))
+                except quick_apply.QuickApplyError as e:
+                    self._emit("chat_error", {"error": str(e)})
+                    return
+                except Exception as e:
+                    self._emit("chat_error", {"error": f"Не удалось откликнуться: {e}"})
+                    return
+                # Детерминированный результат отклика — к модели не ходим,
+                # тут нечего сочинять.
+                self._chat_history.append({"role": "assistant", "content": result.message})
+                self._emit("chat_reply", {"text": result.message})
+                return
+
+            elif vacancy_url:
+                # Просто ссылка на вакансию — читаем и обсуждаем, без отклика.
+                self._emit("chat_status", {"text": "Открываю вакансию…"})
+                try:
+                    info = await quick_apply.fetch_vacancy(vacancy_url)
+                except quick_apply.QuickApplyError as e:
+                    self._emit("chat_error", {"error": str(e)})
+                    return
+                except Exception as e:
+                    self._emit("chat_error", {"error": f"Не удалось открыть вакансию: {e}"})
+                    return
+                turns = turns[:-1] + [{
+                    "role": "user",
+                    "content": build_vacancy_turn(vacancy_url, info.title, info.description, last_user),
+                }]
+                max_tokens = 3000
+                self._emit("chat_status", {"text": "Анализирую…"})
+
             try:
                 reply = await chat_with_retry(turns, system=build_chat_system_prompt(),
-                                              max_tokens=max_tokens, timeout=180)
+                                              max_tokens=max_tokens, timeout=180,
+                                              images=images)
             except ProviderError as e:
                 self._emit("chat_error", {"error": str(e)})
                 return
@@ -697,7 +770,7 @@ def selftest():
         print("\nмодули агента:")
         for mod in ("hh_client", "database", "ai_analyzer", "llm_providers",
                     "notify_sinks", "tg_bot", "control", "playwright_stealth",
-                    "resume_reader", "chat_analyzer"):
+                    "resume_reader", "chat_analyzer", "quick_apply"):
             try:
                 __import__(mod)
                 print(f"  ✅ {mod}")

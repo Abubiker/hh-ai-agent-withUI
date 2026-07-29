@@ -809,21 +809,64 @@ $("btnOpenFolder").onclick = () => api().open_settings_folder();
 /* ================= вкладка «Чат» ================= */
 
 state.chatSending = false;
+let pendingChatImage = null;   // data URL прикреплённого скриншота или null
 
 function renderChatBubble(role, text, opts = {}) {
   $("chatEmpty").style.display = "none";
   const box = $("chatMessages");
   const div = document.createElement("div");
   div.className = "chat-bubble " + role + (opts.error ? " error" : "");
-  const body = `<div class="text">${esc(text).replace(/\n/g, "<br>")}</div>`;
+  const img = opts.image ? `<img class="chat-bubble-img" src="${esc(opts.image)}" alt="">` : "";
+  // Картинка без подписи — пустой .text не рисуем, иначе пузырь просит место зря.
+  const body = text ? `<div class="text">${esc(text).replace(/\n/g, "<br>")}</div>` : "";
   const retry = opts.error
     ? `<button class="chat-retry" id="chatRetryBtn">Повторить</button>` : "";
-  div.innerHTML = body + retry;
+  div.innerHTML = img + body + retry;
   box.appendChild(div);
   box.scrollTop = box.scrollHeight;
   if (opts.error) $("chatRetryBtn").onclick = retryChat;
   return div;
 }
+
+function readImageFile(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingChatImage = reader.result;
+    $("chatAttachThumb").src = pendingChatImage;
+    $("chatAttachPreview").style.display = "flex";
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearAttachPreview() {
+  pendingChatImage = null;
+  $("chatAttachThumb").src = "";
+  $("chatAttachPreview").style.display = "none";
+}
+
+$("btnChatAttach").onclick = () => $("chatImageInput").click();
+$("chatImageInput").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (f) readImageFile(f);
+  e.target.value = "";   // иначе повторный выбор того же файла не даст change
+});
+$("chatAttachRemove").onclick = clearAttachPreview;
+
+// Вставка скриншота из буфера (Cmd+V) — самый частый способ поделиться
+// скриншотом на Mac, наравне с кнопкой-пикером.
+$("chatInput").addEventListener("paste", e => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type && item.type.startsWith("image/")) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) readImageFile(file);
+      break;
+    }
+  }
+});
 
 function setChatStatus(text) {
   let el = document.getElementById("chatStatusLine");
@@ -851,13 +894,15 @@ function setChatSending(on) {
 async function sendChatMessage() {
   const input = $("chatInput");
   const text = input.value.trim();
-  if (!text || state.chatSending) return;
+  const image = pendingChatImage;
+  if ((!text && !image) || state.chatSending) return;
   input.value = "";
   input.style.height = "auto";
-  renderChatBubble("user", text);
+  clearAttachPreview();
+  renderChatBubble("user", text, { image });
   setChatSending(true);
-  setChatStatus("Печатает…");
-  const r = await api().send_chat_message(text);
+  setChatStatus(image ? "Смотрю на скриншот…" : "Печатает…");
+  const r = await api().send_chat_message(text, image || null);
   if (!r.ok) {
     clearChatStatus();
     setChatSending(false);

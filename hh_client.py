@@ -421,6 +421,78 @@ async def diagnose_page(page, kind: str = "vacancy"):
     except Exception as e:
         return "unknown", f"не удалось разобрать страницу: {e}"
 
+
+async def response_confirmed(page, href: str) -> bool:
+    """Спрашивает у самого hh.ru, создан ли отклик на самом деле.
+
+    Признак: на вакансии с существующим откликом hh убирает кнопку
+    «Откликнуться». Само отсутствие кнопки ничего не доказывает — её нет
+    и на капче, и на архивной вакансии, поэтому сначала убеждаемся, что
+    перед нами действительно страница вакансии.
+
+    Свободная функция (не метод HHClient) — не использует self, поэтому
+    также переиспользуется из quick_apply.py для одиночного отклика из чата.
+    """
+    try:
+        await page.goto(href.split("?")[0], wait_until="domcontentloaded")
+        await page.locator('div[data-qa="vacancy-description"]').wait_for(
+            state="visible", timeout=20000)
+    except Exception as e:
+        # Не смогли посмотреть страницу — подтверждения нет. Лучше повторить
+        # попытку, чем записать несуществующий отклик как успешный.
+        print(f"⚠️ Не удалось проверить статус отклика: {e}")
+        return False
+
+    return await page.locator('a[data-qa="vacancy-response-link-top"]').count() == 0
+
+
+async def attach_letter_after(page, cover_letter: str) -> bool:
+    """Дописывает сопроводительное уже после отправленного отклика.
+
+    Часть вакансий на HH откликается в один клик, без формы письма —
+    зато после отклика он сам показывает «Добавить сопроводительное».
+    Раньше агент этого не делал и отклик навсегда оставался пустым.
+
+    Свободная функция — см. response_confirmed() выше, та же причина.
+    """
+    try:
+        await asyncio.sleep(1.5)  # даём отрисоваться экрану после отклика
+        link = page.locator(
+            'text="Добавить сопроводительное"').or_(
+            page.locator('text="Написать сопроводительное"')).first
+        if not await link.is_visible(timeout=3000):
+            return False
+
+        print("✍️ Досылаю сопроводительное после отклика…")
+        await link.click()
+
+        field = await wait_letter_field(page)
+        if field is None:
+            # Здесь письмо отправляется как сообщение в чат отклика
+            field = page.locator('textarea:visible').first
+            if not await field.is_visible(timeout=2000):
+                return False
+
+        await field.fill(cover_letter)
+        await asyncio.sleep(0.3)
+        if not (await field.input_value()).strip():
+            return False
+
+        send = page.locator(
+            'button[data-qa*="letter-send"]').or_(
+            page.locator('button[data-qa*="chat-form-submit"]')).or_(
+            page.locator('button:has-text("Отправить")')).first
+        if not await send.is_visible(timeout=2000):
+            return False
+        await send.click()
+        await asyncio.sleep(1.5)
+        print("✅ Сопроводительное дослано после отклика")
+        return True
+    except Exception as e:
+        print(f"⚠️ Не удалось дослать сопроводительное: {e}")
+        return False
+
+
 class HHClient:
     def __init__(self, sinks=None):
         self.playwright = None
@@ -455,26 +527,6 @@ class HHClient:
         
         self.page = await self.context.new_page()
         await Stealth().apply_stealth_async(self.page)
-
-    async def _response_confirmed(self, page, href: str) -> bool:
-        """Спрашивает у самого hh.ru, создан ли отклик на самом деле.
-
-        Признак: на вакансии с существующим откликом hh убирает кнопку
-        «Откликнуться». Само отсутствие кнопки ничего не доказывает — её нет
-        и на капче, и на архивной вакансии, поэтому сначала убеждаемся, что
-        перед нами действительно страница вакансии.
-        """
-        try:
-            await page.goto(href.split("?")[0], wait_until="domcontentloaded")
-            await page.locator('div[data-qa="vacancy-description"]').wait_for(
-                state="visible", timeout=20000)
-        except Exception as e:
-            # Не смогли посмотреть страницу — подтверждения нет. Лучше повторить
-            # попытку, чем записать несуществующий отклик как успешный.
-            print(f"⚠️ Не удалось проверить статус отклика: {e}")
-            return False
-
-        return await page.locator('a[data-qa="vacancy-response-link-top"]').count() == 0
 
     async def login_if_needed(self):
         print("Переходим на HH.ru для проверки авторизации...")
@@ -836,13 +888,13 @@ class HHClient:
                                         # сразу по клику), он сам предлагает дослать письмо —
                                         # пользуемся этим, чтобы вакансия не осталась пустой.
                                         if not letter_sent:
-                                            letter_sent = await self._attach_letter_after(page, cover_letter)
+                                            letter_sent = await attach_letter_after(page, cover_letter)
 
                                         # Клик ≠ отправленный отклик: hh может потребовать
                                         # доп. шаг или молча ничего не сделать. Спрашиваем сам
                                         # сайт, иначе несуществующий отклик попадает в базу как
                                         # успешный и вакансия теряется навсегда.
-                                        if not await self._response_confirmed(page, href):
+                                        if not await response_confirmed(page, href):
                                             attempts = database.bump_failed_response(job_id, title)
                                             self.stats.apply_failed += 1
                                             print(f"❗ Отклик НЕ подтверждён сайтом (попытка {attempts}): {title}")
@@ -885,7 +937,7 @@ class HHClient:
                                     # Кнопки нет — обычно потому, что отклик уже есть. Но так же
                                     # выглядит недогруженная страница, поэтому не гадаем, а
                                     # спрашиваем hh.
-                                    if await self._response_confirmed(page, href):
+                                    if await response_confirmed(page, href):
                                         self.stats.already += 1
                                         print(f"Отклик уже был отправлен ранее: {title}")
                                         database.add_applied_job(job_id, title, href)
@@ -939,50 +991,6 @@ class HHClient:
                         page_num += 1
                     else:
                         break
-
-    async def _attach_letter_after(self, page, cover_letter: str) -> bool:
-        """Дописывает сопроводительное уже после отправленного отклика.
-
-        Часть вакансий на HH откликается в один клик, без формы письма —
-        зато после отклика он сам показывает «Добавить сопроводительное».
-        Раньше агент этого не делал и отклик навсегда оставался пустым.
-        """
-        try:
-            await asyncio.sleep(1.5)  # даём отрисоваться экрану после отклика
-            link = page.locator(
-                'text="Добавить сопроводительное"').or_(
-                page.locator('text="Написать сопроводительное"')).first
-            if not await link.is_visible(timeout=3000):
-                return False
-
-            print("✍️ Досылаю сопроводительное после отклика…")
-            await link.click()
-
-            field = await wait_letter_field(page)
-            if field is None:
-                # Здесь письмо отправляется как сообщение в чат отклика
-                field = page.locator('textarea:visible').first
-                if not await field.is_visible(timeout=2000):
-                    return False
-
-            await field.fill(cover_letter)
-            await asyncio.sleep(0.3)
-            if not (await field.input_value()).strip():
-                return False
-
-            send = page.locator(
-                'button[data-qa*="letter-send"]').or_(
-                page.locator('button[data-qa*="chat-form-submit"]')).or_(
-                page.locator('button:has-text("Отправить")')).first
-            if not await send.is_visible(timeout=2000):
-                return False
-            await send.click()
-            await asyncio.sleep(1.5)
-            print("✅ Сопроводительное дослано после отклика")
-            return True
-        except Exception as e:
-            print(f"⚠️ Не удалось дослать сопроводительное: {e}")
-            return False
 
     async def check_chats(self, send_notification_func):
         # Вызывается сразу после поиска — без этой проверки агент шёл на hh.ru

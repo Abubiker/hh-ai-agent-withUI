@@ -1,9 +1,16 @@
-playwright
+# camoufox тянет за собой конкретную версию playwright (жёсткая зависимость,
+# на 0.5.4 это 1.60.0) — при её несовпадении с уже установленным браузером
+# playwright молча не находит бинарник ("Executable doesn't exist"). Пиним
+# сюда же, чтобы не ловить это на ровном месте при следующей установке.
+playwright==1.60.0
+# Camoufox — единственный поддерживаемый браузер (антидетект-сборка
+# Firefox, см. hh_session.py). playwright-stealth больше не нужен: его
+# патчи были под Chromium-специфичные признаки автоматизации.
+camoufox[geoip]==0.5.4
 aiogram
 python-dotenv
 requests
 aiohttp
-playwright-stealth
 keyring          # опционально: только если включить хранение в Связке ключей
 desktop-notifier
 

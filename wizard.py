@@ -103,7 +103,7 @@ async def step_model(step=None, total=None):
     llm = settings.data["llm"]
     idx = await choose("Чем пользуемся?", [
         ("Локальная (Ollama)", "бесплатно, нужно 16 ГБ памяти"),
-        ("OpenAI-совместимый сервис", "OpenRouter, Mistral, Groq, LM Studio…"),
+        ("OpenAI-совместимый сервис", "OpenRouter, Mistral, Groq, Google Gemini, LM Studio…"),
         ("Anthropic", "по ключу"),
     ], default={"ollama": 1, "openai_compat": 2, "anthropic": 3}.get(
         llm.get("provider"), 1))
@@ -239,7 +239,7 @@ async def step_ready(step=None, total=None):
         ("Браузер для Playwright", st["browser"],
          "поставьте: playwright install chromium"),
         ("Модель отвечает", st["model_ready"], st.get("model_note", "")),
-        ("Вход в аккаунт hh.ru", st["logged_in"],
+        (f"Вход в аккаунт {st['site']}", st["logged_in"],
          "выполнится при первом запуске — откроется окно браузера"),
         ("Название резюме", st["resume"], "шаг «Резюме»"),
         ("Профиль для писем", st["summary"], "шаг «Резюме»"),

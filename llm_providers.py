@@ -78,8 +78,16 @@ class LLMProvider:
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
         dt = time.monotonic() - t0
-        reply = " ".join((answer or "").split())[:40] or "(пустой ответ)"
-        msg = f"Модель ответила за {dt:.1f} с: «{reply}»"
+        clean = " ".join((answer or "").split())
+        if not clean:
+            # Пустой content — типичный симптом "думающей" модели (Gemini
+            # 2.5+, o1/o3, DeepSeek-R1): скрытые рассуждения съели весь
+            # max_tokens. Зелёная галочка тут была бы ложью — классификатор
+            # с тем же лимитом будет так же молчать на каждой вакансии.
+            return False, (f"Модель ответила за {dt:.1f} с, но текст пустой — "
+                            "похоже, лимита токенов не хватает на скрытые "
+                            "рассуждения модели. Попробуйте другую модель.")
+        msg = f"Модель ответила за {dt:.1f} с: «{clean[:40]}»"
         return True, (msg + f". {note}" if note else msg)
 
     async def list_models(self) -> list[str]:
@@ -224,9 +232,19 @@ OPENAI_PRESETS = [
     ("OpenRouter", "https://openrouter.ai/api/v1", "есть бесплатные модели, ключ обязателен"),
     ("Mistral", "https://api.mistral.ai/v1", "ключ обязателен"),
     ("Groq", "https://api.groq.com/openai/v1", "быстрый, ключ обязателен"),
+    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
+     "есть бесплатный лимит, ключ обязателен"),
     ("LM Studio", "http://localhost:1234/v1", "локально, ключ не нужен"),
     ("OpenAI", "https://api.openai.com/v1", "ключ обязателен"),
 ]
+
+# Классификатору хватает одного токена, но у «думающих» моделей (Gemini
+# 2.5+, DeepSeek-R1, o1/o3, QwQ) скрытые рассуждения тратятся ИЗ ЭТОГО ЖЕ
+# лимита и съедают его целиком — ответ приходит с content: null. Пустой
+# ответ is_vacancy_suitable понимал бы как «не подходит», и вакансия
+# уходила бы в базу навсегда. Сервисы берут деньги за фактически выданные
+# токены, а не за лимит, поэтому на обычных моделях расход не меняется.
+DETERMINISTIC_MAX_TOKENS = 512
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -278,8 +296,8 @@ class OpenAICompatProvider(LLMProvider):
         return await self._request(
             [{"role": "user", "content": prompt}],
             temperature=0 if deterministic else 0.7,
-            # Классификатору хватает пары токенов, письму нужен запас.
-            max_tokens=16 if deterministic else 1500, timeout=timeout)
+            max_tokens=DETERMINISTIC_MAX_TOKENS if deterministic else 1500,
+            timeout=timeout)
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
                     max_tokens: int = 2000, timeout: int = 180,
@@ -315,7 +333,8 @@ class OpenAICompatProvider(LLMProvider):
                                   if not self.api_key else ""))
             if code == 404:
                 return False, (f"По адресу {self.base_url} нет метода /models — "
-                               "проверьте, что адрес заканчивается на /v1")
+                               "проверьте адрес (обычно /v1, у Google Gemini — "
+                               "/v1beta/openai)")
             return False, f"Сервер недоступен по адресу {self.base_url} ({e})"
         if models and self.model not in models:
             return False, f"Модель «{self.model}» не найдена. Есть: {', '.join(models[:5])}"
@@ -379,7 +398,8 @@ class AnthropicProvider(LLMProvider):
         return await self._request(
             [{"role": "user", "content": prompt}], system=None,
             temperature=0 if deterministic else 1,
-            max_tokens=16 if deterministic else 1500, timeout=timeout)
+            max_tokens=DETERMINISTIC_MAX_TOKENS if deterministic else 1500,
+            timeout=timeout)
 
     async def chat(self, messages: list[dict], *, system: str | None = None,
                     max_tokens: int = 2000, timeout: int = 180,
@@ -433,8 +453,15 @@ async def complete_with_retry(prompt: str, *, deterministic: bool = False,
     last = None
     for attempt in range(1, attempts + 1):
         try:
-            return await provider.complete(prompt, deterministic=deterministic,
-                                           timeout=timeout)
+            answer = await provider.complete(prompt, deterministic=deterministic,
+                                             timeout=timeout)
+            if not answer.strip():
+                # Пустой content — тот же класс ошибки, что и сбой связи:
+                # "думающая" модель съела max_tokens на скрытые рассуждения.
+                # Молча считать это честным "нет" уже стоило потерянных
+                # вакансий (см. DETERMINISTIC_MAX_TOKENS выше) — повторяем.
+                raise ProviderError(f"{provider.name}: модель вернула пустой ответ")
+            return answer
         except ProviderError as e:
             last = e
             print(f"Ошибка обращения к модели, попытка {attempt}/{attempts}: {e}")

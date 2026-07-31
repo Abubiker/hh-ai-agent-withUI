@@ -3,12 +3,13 @@ import re
 import time
 import asyncio
 import random
-from playwright.async_api import async_playwright
-from playwright_stealth import Stealth
+import applog
 import database
 import control
+import sites
+import hh_session
 from stats import Stats
-from ai_analyzer import is_vacancy_suitable, generate_cover_letter
+from ai_analyzer import is_vacancy_suitable, generate_cover_letter, active_style
 from settings import settings
 from urllib.parse import quote_plus
 
@@ -16,6 +17,11 @@ from settings import user_file
 
 # Файлы лежат в папке пользователя, а не рядом с кодом: внутри собранного
 # .app соседняя папка временная и только для чтения.
+#
+# STATE_FILE — сессия hh.ru конкретно, оставлена ради обратной совместимости
+# (это ровно тот путь, что был единственным до появления мультидоменности).
+# Для остальных площадок и для кода, который должен работать с ЛЮБОЙ
+# активной площадкой, используйте sites.state_file()/sites.active_site().
 STATE_FILE = str(user_file("state.json"))
 CAPTCHA_FILE = str(user_file("captcha.png"))
 
@@ -27,6 +33,24 @@ MAX_RESPONSE_ATTEMPTS = 3
 # Сколько ждать поле сопроводительного письма. Форма отклика — модалка
 # с анимацией, поле подъезжает не сразу.
 LETTER_FIELD_TIMEOUT = 10.0
+
+# Сколько ждать первый ручной вход пользователя (СМС-код, капча и т.п.).
+# Даём щедрый запас — торопить тут некого и незачем.
+LOGIN_WAIT_TIMEOUT_MS = 600_000  # 10 минут
+
+# page.mouse.move/wheel не принимают timeout (в отличие от локаторов) —
+# если браузер завис на уровне протокола, такой вызов виснет НАВСЕГДА и
+# вместе с ним весь цикл агента (см. отчёты о «замирании» после генерации
+# письма). Оборачиваем в asyncio.wait_for, чтобы зависание стало обычной
+# ошибкой вакансии, а не смертью всего сеанса.
+MOUSE_ACTION_TIMEOUT = 10.0
+
+
+def _trace(step: str):
+    """Строка только в файловый agent.log (не в интерфейс) — детальный след
+    по шагам внутри обработки вакансии, чтобы при зависании было видно,
+    на каком именно вызове оно случилось (см. applog.py)."""
+    applog.log(step, level="debug")
 
 
 class SkipVacancy(Exception):
@@ -324,7 +348,13 @@ async def fill_letter(field, text: str) -> bool:
     HH — реактивное приложение: fill() иногда не доходит до состояния формы,
     и поле сбрасывается. Поэтому после заполнения значение читается обратно,
     а при неудаче текст набирается посимвольно, как это делал бы человек.
+
+    HH обрезает сопроводительное до 2000 символов. Раньше лимит применялся
+    только на запасном пути (type()) — быстрый путь (fill()) отправлял
+    полный текст, и уведомление пользователю показывало не то, что реально
+    приняла форма. Обрезаем один раз, до обеих попыток.
     """
+    text = text[:2000]
     try:
         await field.fill(text)
         await asyncio.sleep(0.4)
@@ -337,11 +367,12 @@ async def fill_letter(field, text: str) -> bool:
     try:
         await field.click()
         await asyncio.sleep(0.2)
-        await field.type(text[:2000], delay=1)
+        await field.type(text, delay=1)
         await asyncio.sleep(0.4)
         return bool((await field.input_value()).strip())
     except Exception as e:
         print(f"   не удалось вписать письмо: {e}")
+        applog.exc()
         return False
 
 
@@ -377,7 +408,7 @@ async def handle_vpn_check(page) -> bool:
     return False
 
 
-async def diagnose_page(page, kind: str = "vacancy"):
+async def diagnose_page(page, kind: str = "vacancy", host: str | None = None):
     """Разбирается, почему на странице нет описания вакансии.
 
     Исходный код считал капчей ЛЮБОЕ отсутствие описания, хотя чаще это
@@ -385,10 +416,15 @@ async def diagnose_page(page, kind: str = "vacancy"):
     Код: captcha | archived | not_found | redirect | unknown
 
     kind различает, какую страницу ждём: финальная проверка URL для вакансии
-    ищет "hh.ru/vacancy/", а для резюме — "hh.ru/resume/". Без этого параметра
+    ищет "{host}/vacancy/", а для резюме — "{host}/resume/". Без этого параметра
     любая успешно открывшаяся страница резюме считалась бы редиректом, потому
     что её адрес никогда не содержит "/vacancy/".
+
+    host — домен площадки (hh.ru, hh.kz, ...), по умолчанию активная площадка
+    из настроек. Явно передавайте host, когда страница открыта НЕ на активной
+    площадке (например, ссылка из чата на другой домен группы).
     """
+    host = host or sites.active_site()["host"]
     try:
         url = page.url
         try:
@@ -414,7 +450,7 @@ async def diagnose_page(page, kind: str = "vacancy"):
             if any(w in probe for w in words):
                 return code, f"{code} (по тексту страницы)"
 
-        url_marker = "hh.ru/vacancy/" if kind == "vacancy" else "hh.ru/resume/"
+        url_marker = f"{host}/vacancy/" if kind == "vacancy" else f"{host}/resume/"
         if url_marker not in url:
             return "redirect", f"редирект на {url[:80]}"
         return "unknown", f"описание не найдено, заголовок: {title[:60]!r}"
@@ -441,6 +477,7 @@ async def response_confirmed(page, href: str) -> bool:
         # Не смогли посмотреть страницу — подтверждения нет. Лучше повторить
         # попытку, чем записать несуществующий отклик как успешный.
         print(f"⚠️ Не удалось проверить статус отклика: {e}")
+        applog.exc()
         return False
 
     return await page.locator('a[data-qa="vacancy-response-link-top"]').count() == 0
@@ -494,7 +531,9 @@ async def attach_letter_after(page, cover_letter: str) -> bool:
 
 
 class HHClient:
-    def __init__(self, sinks=None):
+    def __init__(self, sinks=None, site=None):
+        self.site = site or sites.active_site()
+        self.state_file = sites.state_file(self.site)
         self.playwright = None
         self.browser = None
         self.context = None
@@ -504,35 +543,38 @@ class HHClient:
         # пагинации на повторных проверках) и о каких пропусках уже сообщали
         # (чтобы не спамить лог одними и теми же строками каждую проверку).
         self._seen_ids = set()
-        self._skip_logged = set()
+        # Загружается из agent.db (таблица seen_skips), а не только из памяти:
+        # иначе после перезапуска приложения агент заново печатал те же ~28
+        # строк «⏩ Пропускаю» на каждую уже виденную отсеянную вакансию.
+        # Сам стоп-фильтр всё равно проверяет каждую вакансию каждый раз —
+        # это подавляет только повторный лог, не проверку.
+        self._skip_logged = database.load_seen_skips()
         # Получатели уведомлений. Нужны в том числе для ввода капчи: её может
         # принять окно приложения или Telegram, смотря что настроено.
         if sinks is None:
             from notify_sinks import build_sinks
             sinks = build_sinks(telegram=control.telegram_enabled)
         self.sinks = sinks
+        # Подстраховка к авто-детекту первого входа (см. login_if_needed):
+        # интерфейс может выставить это событие сам, если пользователь нажал
+        # «Я вошёл — сохранить сейчас», не дожидаясь, пока страница сама
+        # покажет признак входа. В CLI не используется и остаётся None.
+        self.login_confirm_event: asyncio.Event | None = None
 
     async def start(self):
-        self.playwright = await async_playwright().start()
         # Запуск в headless=False для того, чтобы в первый раз пользователь мог войти (ввести смс/пароль),
-        # либо полностью headless, если state.json существует.
-        headless = os.path.exists(STATE_FILE)
-        self.browser = await self.playwright.chromium.launch(headless=headless)
-        
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-        if os.path.exists(STATE_FILE):
-            self.context = await self.browser.new_context(storage_state=STATE_FILE, user_agent=user_agent)
-        else:
-            self.context = await self.browser.new_context(user_agent=user_agent)
-        
-        self.page = await self.context.new_page()
-        await Stealth().apply_stealth_async(self.page)
+        # либо полностью headless, если сессия этой площадки уже сохранена.
+        headless = os.path.exists(self.state_file)
+        self.playwright, self.browser, self.context = await hh_session.open_session(
+            self.site, headless=headless, require_login=False)
+        self.page = await hh_session.new_stealth_page(self.context)
 
     async def login_if_needed(self):
-        print("Переходим на HH.ru для проверки авторизации...")
-        # domcontentloaded, а не load: hh.ru держит websocket чатов и аналитику,
+        base = sites.base_url(self.site)
+        print(f"Переходим на {self.site['host']} для проверки авторизации...")
+        # domcontentloaded, а не load: hh держит websocket чатов и аналитику,
         # событие load может не наступить вовсе и уронить весь запуск по таймауту.
-        await self.page.goto("https://hh.ru/", wait_until="domcontentloaded")
+        await self.page.goto(f"{base}/", wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
         # Ждём не networkidle (по той же причине он может не наступить никогда),
@@ -543,41 +585,69 @@ class HHClient:
                 'a[href*="/applicant/resumes"], a:has-text("Войти"), button:has-text("Войти")'
             ).first.wait_for(timeout=30000)
         except Exception:
-            print("⚠️ Шапка hh.ru не отрисовалась за 30 с — проверяю страницу как есть.")
+            print(f"⚠️ Шапка {self.site['host']} не отрисовалась за 30 с — проверяю страницу как есть.")
         await asyncio.sleep(2)
 
-        # Ищем любую ссылку или кнопку с текстом "Войти"
+        # Положительный маркер входа — ссылка на резюме соискателя. Кнопка
+        # "Войти" использовалась раньше как единственный признак, но её текст
+        # зависит от языка интерфейса, а язык площадки может быть не русским.
+        resumes_link = self.page.locator('a[href*="/applicant/resumes"]')
+        if await resumes_link.count():
+            print("Уже авторизованы (найдена ссылка на резюме).")
+            return True
+
+        # Вторичное подтверждение на русском — для решения "удалить протухший
+        # файл сессии или создать новый".
         login_link = self.page.locator('a:has-text("Войти")')
         login_button = self.page.locator('button:has-text("Войти")')
-        
+
         if not await login_link.count() and not await login_button.count():
             print("Уже авторизованы (кнопка 'Войти' не найдена).")
             return True
 
-        if os.path.exists(STATE_FILE):
-            os.remove(STATE_FILE)
-            print("❌ Файл сессии (state.json) недействителен. Я его удалил.")
+        if os.path.exists(self.state_file):
+            os.remove(self.state_file)
+            print(f"❌ Файл сессии {self.site['host']} недействителен. Я его удалил.")
             print("Пожалуйста, перезапустите скрипт (python main.py), чтобы открылось окно браузера для входа.")
             return False
 
         print("=========================================")
         print("❗ НУЖНА АВТОРИЗАЦИЯ ❗")
-        print("1. В открывшемся браузере войдите в свой аккаунт HH.ru.")
-        print("2. Дождитесь, пока загрузится ваш профиль.")
-        print("3. ВЕРНИТЕСЬ В ЭТО ОКНО КОНСОЛИ И НАЖМИТЕ КЛАВИШУ ENTER.")
+        print(f"В открывшемся браузере войдите в свой аккаунт {self.site['host']}.")
+        print("Дальше не нужно ничего нажимать здесь — как только вход будет виден на странице, работа продолжится сама.")
         print("=========================================")
-        
+
         try:
-            # Ожидаем нажатия Enter (в отдельном потоке, чтобы не блокировать асинхронность)
-            await asyncio.to_thread(input, "👉 Нажмите ENTER здесь, когда войдете в аккаунт: ")
-            
+            # Раньше здесь ждали нажатия Enter в терминале. В собранном .app
+            # терминала нет: input() падает по EOFError почти мгновенно, из-за
+            # чего окно браузера открывалось и тут же закрывалось, а вход
+            # никогда не завершался. Вместо этого ждём сам факт входа прямо
+            # на странице — работает одинаково из консоли и из приложения.
+            #
+            # login_confirm_event — подстраховка поверх авто-детекта: если
+            # интерфейс выставил его (пользователь нажал «Я вошёл — сохранить
+            # сейчас»), сохраняем сразу, не дожидаясь и не требуя, чтобы
+            # сработал именно локатор — на случай, если разметку hh изменят.
+            detect_task = asyncio.ensure_future(
+                self.page.locator('a[href*="/applicant/resumes"]').first.wait_for(
+                    timeout=LOGIN_WAIT_TIMEOUT_MS))
+            confirm_task = (asyncio.ensure_future(self.login_confirm_event.wait())
+                            if self.login_confirm_event is not None else None)
+            waiters = [detect_task] + ([confirm_task] if confirm_task else [])
+
+            done, pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            if confirm_task not in done:
+                detect_task.result()  # None при успехе, бросает при таймауте
+
             print("⏳ Сохраняем сессию...")
             await asyncio.sleep(2) # На всякий случай даем странице загрузиться
-            await self.context.storage_state(path=STATE_FILE)
+            await self.context.storage_state(path=self.state_file)
             print("✅ Авторизация успешна, состояние сохранено!")
             return True
         except Exception as e:
-            print(f"❌ Произошла ошибка при сохранении авторизации: {e}")
+            print(f"❌ Не дождались входа в аккаунт: {e}")
             return False
 
     async def search_and_apply(self, send_notification_func):
@@ -613,7 +683,7 @@ class HHClient:
                 # search_field=name — искать слова запроса только в названии вакансии.
                 field = "&search_field=name" if settings.title_only else ""
                 exp = "".join(f"&experience={e}" for e in settings.experience)
-                url = (f"https://hh.ru/search/vacancy?text={quote_plus(query)}"
+                url = (f"{sites.base_url(self.site)}/search/vacancy?text={quote_plus(query)}"
                        f"{field}&order_by=publication_time"
                        f"{exp}{config['params']}")
                 await self.page.goto(url, wait_until="domcontentloaded")
@@ -651,7 +721,14 @@ class HHClient:
                         if "vacancy/" in href:
                             job_id = href.split("vacancy/")[1].split("?")[0]
 
-                        if not job_id or database.is_job_applied(job_id):
+                        if not job_id:
+                            continue
+                        if database.is_job_applied(job_id):
+                            # Молча continue — токенов это не стоит (проверка ДО
+                            # модели), но пользователю казалось, что агент
+                            # «обрабатывает одни и те же вакансии заново». Счётчик
+                            # делает это видимым в итоге цикла (см. ui_app.py).
+                            self.stats.db_skipped += 1
                             continue
 
                         # Вакансия встречена впервые за сеанс — даже если её сейчас
@@ -677,14 +754,14 @@ class HHClient:
                             # строкой каждую проверку — только при первой встрече.
                             if job_id not in self._skip_logged:
                                 self._skip_logged.add(job_id)
+                                database.mark_skip_seen(job_id)
                                 self.stats.hard_skipped += 1
                                 print(f"⏩ Пропускаю (не тот грейд/профессия — '{hit}'): {title}")
                             continue
 
                         self.stats.viewed += 1
                         print(f"👁️ Открываем вакансию: {title}")
-                        page = await self.context.new_page()
-                        await Stealth().apply_stealth_async(page)
+                        page = await hh_session.new_stealth_page(self.context)
                         try:
                             await page.goto(href, wait_until="domcontentloaded")
                             await asyncio.sleep(2)
@@ -697,7 +774,7 @@ class HHClient:
                             # Если описания нет — разбираемся, ЧТО именно на странице.
                             # Раньше любое отсутствие описания считалось капчей.
                             while not await desc_loc.is_visible():
-                                reason_code, reason_text = await diagnose_page(page)
+                                reason_code, reason_text = await diagnose_page(page, host=self.site["host"])
 
                                 # Архив, удалённая вакансия или чужая вёрстка — не капча,
                                 # решать нечего. Помечаем обработанной и идём дальше.
@@ -782,6 +859,7 @@ class HHClient:
                                     raise  # штатный пропуск, не глушим
                                 except Exception as e:
                                     print(f"Ошибка при обработке капчи: {e}")
+                                    applog.exc()
                                     raise SkipVacancy("captcha_error")
                             description = await desc_loc.inner_text()
 
@@ -793,23 +871,43 @@ class HHClient:
                                 # Письмо пишется ~12 секунд — без этой строки в логе
                                 # было полное затишье, интерфейсу нечем показать прогресс.
                                 print(f"✍️ Пишу сопроводительное — {title}")
-                                cover_letter = await generate_cover_letter(title, description)
+                                # Стиль читаем ЗАРАНЕЕ (а не отдаём генератору выбирать
+                                # молча), чтобы записать его вместе с откликом в БД —
+                                # иначе конверсию по стилям потом не с чем сравнивать.
+                                letter_style = active_style()
+                                _trace(f"letter: генерация начата ({title})")
+                                cover_letter = await generate_cover_letter(
+                                    title, description, style=letter_style)
                                 self.stats.letters += 1
+                                _trace("letter: получено, ищу кнопку отклика")
 
                                 # Пробуем откликнуться
                                 apply_btn = page.locator('a[data-qa="vacancy-response-link-top"]').first
-                                if await apply_btn.is_visible():
-                                    # Имитируем поведение человека перед откликом
-                                    await page.mouse.move(random.randint(100, 700), random.randint(100, 500))
-                                    await page.mouse.wheel(0, random.randint(200, 600))
+                                apply_visible = await apply_btn.is_visible()
+                                _trace(f"apply: кнопка видима={apply_visible}")
+                                if apply_visible:
+                                    # Имитируем поведение человека перед откликом.
+                                    # mouse.move/wheel не поддерживают timeout — на завис
+                                    # браузера/протокола это раньше вешало весь цикл агента.
+                                    _trace("apply: имитация поведения — движение мыши")
+                                    await asyncio.wait_for(
+                                        page.mouse.move(random.randint(100, 700), random.randint(100, 500)),
+                                        timeout=MOUSE_ACTION_TIMEOUT)
+                                    await asyncio.wait_for(
+                                        page.mouse.wheel(0, random.randint(200, 600)),
+                                        timeout=MOUSE_ACTION_TIMEOUT)
                                     await asyncio.sleep(random.uniform(0.8, 1.5))
-                                    await page.mouse.wheel(0, random.randint(-200, 100))
+                                    await asyncio.wait_for(
+                                        page.mouse.wheel(0, random.randint(-200, 100)),
+                                        timeout=MOUSE_ACTION_TIMEOUT)
                                     await asyncio.sleep(random.uniform(0.5, 1.0))
-                                    
+
+                                    _trace("apply: клик по кнопке отклика")
                                     await apply_btn.click()
                                     # Даем время на открытие попапа ИЛИ загрузку новой страницы отклика
                                     await asyncio.sleep(3)
-                                
+                                    _trace("apply: попап/страница осели — шаг 0, резюме")
+
                                     # Шаг 0: Выбор нужного резюме (если их несколько)
                                     try:
                                         TARGET_RESUME_NAME = settings.target_resume_name
@@ -825,7 +923,9 @@ class HHClient:
                                                     await asyncio.sleep(1)
                                     except Exception as e:
                                         print(f"⚠️ Ошибка при выборе резюме: {e}")
-                                
+                                        applog.exc()
+
+                                    _trace("apply: шаг 0.5 — проверка теста работодателя")
                                     # Шаг 0.5: тест работодателя. Его поля называются
                                     # task_<id>_text и стоят в форме ПЕРЕД полем письма,
                                     # поэтому письмо уходило в ответ на первый вопрос
@@ -843,8 +943,10 @@ class HHClient:
 
                                     # Шаг 1-2: находим поле письма (при необходимости раскрыв его)
                                     # и убеждаемся, что текст реально в него попал.
+                                    _trace("apply: шаг 1-2 — поиск поля письма")
                                     letter_sent = False
                                     letter_field = await open_letter_field(page)
+                                    _trace(f"apply: поле письма найдено={letter_field is not None}")
                                     if letter_field is None:
                                         print(f"⚠️ Поле сопроводительного не найдено: {title}")
                                         # Печатаем, что вообще есть на странице: по этому выводу
@@ -852,6 +954,7 @@ class HHClient:
                                         await dump_textareas(page, title)
                                     else:
                                         letter_sent = await fill_letter(letter_field, cover_letter)
+                                        _trace(f"apply: письмо вписано={letter_sent}")
                                         if letter_sent:
                                             print("   ✅ письмо вписано в форму отклика")
                                         else:
@@ -873,9 +976,12 @@ class HHClient:
                                         raise SkipVacancy("no_letter")
 
                                     # Шаг 3: отправка отклика
+                                    _trace("apply: шаг 3 — поиск кнопки отправки")
                                     submit_btn = await find_submit_button(page)
+                                    _trace(f"apply: кнопка отправки найдена={submit_btn is not None}")
                                     if submit_btn is not None:
                                         await submit_btn.click() # РЕАЛЬНЫЙ ОТКЛИК
+                                        _trace("apply: клик по отправке сделан, жду закрытия формы")
                                         # Ждём закрытия формы, а не спим вслепую: уйти со
                                         # страницы раньше — значит оборвать сам запрос отклика.
                                         try:
@@ -894,6 +1000,7 @@ class HHClient:
                                         # доп. шаг или молча ничего не сделать. Спрашиваем сам
                                         # сайт, иначе несуществующий отклик попадает в базу как
                                         # успешный и вакансия теряется навсегда.
+                                        _trace("apply: проверяю подтверждение отклика сайтом")
                                         if not await response_confirmed(page, href):
                                             attempts = database.bump_failed_response(job_id, title)
                                             self.stats.apply_failed += 1
@@ -905,11 +1012,13 @@ class HHClient:
                                                 await send_notification_func(
                                                     f"❗ Отклик так и не прошёл ({attempts} попытки): "
                                                     f"<a href='{href}'>{title}</a>\n\n"
-                                                    f"<i>hh.ru не подтвердил отправку — нужен ручной отклик.</i>",
+                                                    f"<i>{self.site['host']} не подтвердил отправку — нужен ручной отклик.</i>",
                                                     kind="error")
                                             raise SkipVacancy("not_confirmed")
 
-                                        database.add_applied_job(job_id, title, href)
+                                        database.add_applied_job(
+                                            job_id, title, href,
+                                            style=letter_style if letter_sent else None)
                                         self.stats.applied += 1
                                         if not letter_sent:
                                             self.stats.applied_no_letter += 1
@@ -960,6 +1069,7 @@ class HHClient:
                             # Сюда попадает и сбой связи с моделью (is_vacancy_suitable бросает
                             # исключение). Вакансию НЕ записываем в базу — вернёмся к ней позже.
                             print(f"Ошибка при обработке вакансии {title}: {e}")
+                            applog.exc()
                         finally:
                             await page.close()
                     
@@ -998,7 +1108,8 @@ class HHClient:
         if control.should_stop():
             return
         print("Проверяю новые сообщения в чатах HH...")
-        await self.page.goto("https://hh.ru/applicant/negotiations", wait_until="domcontentloaded")
+        base = sites.base_url(self.site)
+        await self.page.goto(f"{base}/applicant/negotiations", wait_until="domcontentloaded")
         await control.sleep_or_stop(3)
         
         # Находим список откликов с бейджем непрочитанных сообщений (надежный поиск через filter(has=...))
@@ -1012,9 +1123,8 @@ class HHClient:
             # Переходим в чат
             chat_link = await title_loc.get_attribute("href")
             if chat_link:
-                chat_page = await self.context.new_page()
-                await Stealth().apply_stealth_async(chat_page)
-                await chat_page.goto(f"https://hh.ru{chat_link}", wait_until="domcontentloaded")
+                chat_page = await hh_session.new_stealth_page(self.context)
+                await chat_page.goto(f"{base}{chat_link}", wait_until="domcontentloaded")
                 await asyncio.sleep(3)
                 
                 # Получаем последнее сообщение
@@ -1025,7 +1135,7 @@ class HHClient:
                     
                     if not database.is_message_processed(msg_id):
                         database.add_processed_message(msg_id, chat_link, last_msg)
-                        await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='https://hh.ru{chat_link}'>Перейти к чату</a>", kind="reply")
+                        await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='{base}{chat_link}'>Перейти к чату</a>", kind="reply")
                 
                 await chat_page.close()
 

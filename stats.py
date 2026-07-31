@@ -17,6 +17,7 @@ class Stats:
     already: int = 0        # вакансия уже была с откликом (кнопки отклика нет)
     apply_failed: int = 0   # подходила, но откликнуться не удалось
     skipped_page: int = 0   # страница не открылась: архив, редирект, капча
+    db_skipped: int = 0     # уже в базе (отклик или отказ раньше) — молча continue, без токенов
 
     def summary(self) -> str:
         return (

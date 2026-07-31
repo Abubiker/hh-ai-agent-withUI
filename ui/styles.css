@@ -316,6 +316,14 @@ header.titlebar > * { -webkit-app-region: no-drag; }
   font: 400 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint);
 }
 .log-line .icon { display: inline-block; width: 13px; text-indent: 0; vertical-align: -2px; margin-right: 7px; }
+/* Место вызова — только у error/warn (см. renderLogAppend). text-indent:0
+   обязателен: у родителя .text висячий отступ -68px, без сброса значок
+   вызывающего кода уезжал бы влево под время. */
+.log-line .log-origin {
+  display: inline-block; text-indent: 0; padding: 1px 6px; margin-right: 6px;
+  border-radius: 5px; background: var(--surf2); color: var(--faint);
+  font-size: 10.5px; white-space: nowrap;
+}
 .log-line .icon.ok { color: var(--ok); }
 .log-line .icon.warn { color: var(--warn); }
 .log-line .icon.err { color: var(--err); }
@@ -378,6 +386,12 @@ input:focus, textarea:focus, select.plain:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 input:disabled, textarea:disabled { opacity: .5; }
+/* Хвост сохранённого ключа/токена — читается как «пусто», если красить
+   его обычным блёклым цветом placeholder'а: это и есть исходная жалоба
+   («сохранил ключ, а поле выглядит пустым»). На фокусе гасим обратно —
+   там placeholder уже играет привычную роль подсказки, а не статуса. */
+input.has-secret::placeholder { color: var(--text); opacity: 1; }
+input.has-secret:focus::placeholder { color: var(--faint); opacity: 1; }
 textarea { height: auto; padding: 12px 14px; border-radius: var(--radius-inner); font: 400 12.5px/1.65 -apple-system, system-ui, sans-serif; resize: vertical; }
 textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
 
@@ -552,6 +566,17 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .area-hit.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .area-hit .parent { margin-left: auto; font-size: 11.5px; color: var(--faint); }
 
+/* ---------- мастер первого запуска ---------- */
+/* Тот же .overlay/.modal, что у капчи/региона, но крупнее и без пути
+   закрыть/кликнуть мимо — пока вход и резюме не готовы, экран не пускает
+   к обычному интерфейсу вовсе. */
+.onboard-modal { width: 520px; }
+.onboard-progress { display: flex; justify-content: center; gap: 8px; }
+.onboard-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line2); transition: background 160ms; }
+.onboard-dot.done { background: var(--ok); }
+.onboard-dot.active { background: var(--accent); }
+.onboard-step { display: flex; flex-direction: column; gap: 14px; }
+
 .sched-chip {
   height: 28px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line2);
   background: var(--surf2); color: var(--dim); font-size: 12px; cursor: pointer; font-family: inherit;
@@ -577,16 +602,23 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .row.tight { gap: 10px; }
 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 
+/* Однострочный флекс: высота линии считается от самого контейнера, а не
+   растягивается по содержимому карточек внутри (как было бы при wrap) —
+   это и даёт журналу потолок высоты, ниже которого включается его
+   собственный scroll вместо раздувания всей страницы. */
+#secondRow { flex-wrap: nowrap; min-height: 260px; }
+
 /* Порог не на глаз: журналу нужно минимум 425px по содержимому, воронке 340,
    плюс отступ и боковое меню — вдвоём они помещаются примерно с 1085px.
    Ниже ряды складываются в колонку. */
 @media (max-width: 1100px) {
   .content { padding: 22px 20px; }
   .row > .card { flex-basis: 100% !important; }
-  /* Ряд «воронка + журнал» тянется на всю высоту, и при переносе журнал
-     должен остаться высоким, а не схлопнуться в полоску. */
-  #secondRow { flex: none; }
-  #secondRow > .log-card { min-height: 320px; }
+  /* Ряд «воронка + журнал» переходит в колонку — здесь их общий потолок
+     высоты не работает (нет соседа, растягивающего по main-axis), поэтому
+     журналу нужны свои пол И потолок явно. */
+  #secondRow { flex: none; flex-wrap: wrap; }
+  #secondRow > .log-card { min-height: 320px; max-height: 62vh; }
 }
 .hairline { height: 1px; background: var(--line2); }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -625,6 +657,7 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .toast .close { margin-left: 6px; background: none; border: none; color: var(--faint);
                 cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px; flex: none; }
 .toast .close:hover { color: var(--text); }
+#toastAction { flex: none; align-self: center; white-space: nowrap; }
 
 /* ---------- выпадающий выбор модели ----------
    Раскрытый список на семь строк занимал пол-карточки и читался как

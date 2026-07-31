@@ -123,7 +123,7 @@
           </div>
 
           <!-- вторая строка: воронка (если не idle) + журнал -->
-          <div class="row" style="flex:1;min-height:0" id="secondRow">
+          <div class="row" style="flex:1" id="secondRow">
             <div class="card" id="funnelCardSecond"></div>
             <div class="card log-card" style="flex:1;min-width:0">
               <div class="log-toolbar">
@@ -188,6 +188,20 @@
           </div>
 
           <div class="card">
+            <div class="card-title">Стиль сопроводительного</div>
+            <div id="letterStyles"></div>
+            <div class="hint">Действует один стиль — выбирайте, каким агент будет писать письма.</div>
+            <div class="hairline"></div>
+            <div class="switch-row">
+              <div id="letterReviewSwitch" class="switch"><div class="knob"></div></div>
+              <div class="text">
+                <div class="t">Проверять письмо перед отправкой</div>
+                <div class="d">Второй проход модели: убирает повторы и воду, при необходимости переписывает. Отклик занимает на пару секунд дольше.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-title-row">
               <div class="card-title">Поисковые запросы</div>
               <div class="hint" id="queriesInfo" style="margin-left:auto"></div>
@@ -202,6 +216,19 @@
               </div>
             </div>
           </div>
+
+          <div class="card">
+            <!-- Резюме, письма и запросы сохраняются кнопкой, а не сами по
+                 себе: случайно недопечатанный профиль не должен молча уйти
+                 в файл. Регионы — исключение, у них своё мгновенное
+                 сохранение (тумблер / модалка), см. Фильтры. -->
+            <div class="row" style="align-items:center;gap:10px">
+              <div class="hint" id="resumeDirtyHint">Изменений нет</div>
+              <div class="spacer" style="flex:1"></div>
+              <button class="btn" id="btnResumeReset" disabled>Отменить</button>
+              <button class="btn btn-primary" id="btnResumeSave" disabled>Сохранить</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -209,6 +236,25 @@
       <section class="tab-page" id="tab-filters">
         <div class="content" style="flex:1">
           <div class="page-head"><div class="page-head-text"><h1>Фильтры</h1><div class="sub">Чем шире фильтры, тем выше нагрузка на hh.ru и риск проверки</div></div></div>
+
+          <div class="card">
+            <div class="card-title">Сайт поиска</div>
+            <div class="provider-seg" id="siteSeg"></div>
+            <div class="hint">У каждого сайта — свой вход и свои регионы. Ссылки из чата открываются с любого сайта группы независимо от выбора здесь. Интерфейс сайта должен быть на русском.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Браузер</div>
+            <div class="hint">Camoufox — антидетект-браузер, снижает риск проверок и капчи со стороны hh.ru.</div>
+            <div id="camoufoxInstallRow" style="display:none">
+              <div class="hairline"></div>
+              <div class="row" style="align-items:center;gap:10px">
+                <div class="hint" id="camoufoxInstallHint">Camoufox не установлен (~700 МБ)</div>
+                <div class="spacer" style="flex:1"></div>
+                <button class="btn btn-primary btn-small" id="btnInstallCamoufox">Установить</button>
+              </div>
+            </div>
+          </div>
 
           <div class="card">
             <div class="card-title">Объём и темп</div>
@@ -251,6 +297,17 @@
               </label>
             </div>
           </div>
+
+          <div class="card">
+            <!-- Регионы (тумблер и модалка) и сайт поиска сохраняются сами,
+                 остальное здесь — кнопкой, см. комментарий на «Резюме». -->
+            <div class="row" style="align-items:center;gap:10px">
+              <div class="hint" id="filtersDirtyHint">Изменений нет</div>
+              <div class="spacer" style="flex:1"></div>
+              <button class="btn" id="btnFiltersReset" disabled>Отменить</button>
+              <button class="btn btn-primary" id="btnFiltersSave" disabled>Сохранить</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -283,11 +340,6 @@
                 <label class="field" style="flex:1"><span class="field-label">Сервис</span>
                   <select class="plain" id="openaiPreset">
                     <option value="">Свой адрес</option>
-                    <option value="https://openrouter.ai/api/v1">OpenRouter</option>
-                    <option value="https://api.mistral.ai/v1">Mistral</option>
-                    <option value="https://api.groq.com/openai/v1">Groq</option>
-                    <option value="http://localhost:1234/v1">LM Studio</option>
-                    <option value="https://api.openai.com/v1">OpenAI</option>
                   </select>
                 </label>
                 <label class="field" style="flex:2"><span class="field-label">Базовый адрес</span><input type="text" id="openaiUrl" class="mono"></label>
@@ -432,6 +484,12 @@
               <div class="spacer" style="flex:1"></div>
               <button class="btn" id="btnOpenFolder" style="align-self:flex-start">Показать в Finder</button>
             </div>
+            <div class="card" style="flex:0 1 322px;min-width:260px">
+              <div class="card-title">Логи агента</div>
+              <div class="hint">Полная история работы агента — на случай, если что-то пошло не так, а окно уже закрыто.</div>
+              <div class="spacer" style="flex:1"></div>
+              <button class="btn" id="btnOpenLogsFolder" style="align-self:flex-start">Открыть папку логов</button>
+            </div>
           </div>
         </div>
       </section>
@@ -478,7 +536,7 @@
     <div class="modal-head">
       <div class="icon-box"><i data-icon="captcha18"></i></div>
       <div class="text">
-        <div class="title">hh.ru просит подтвердить, что вы человек</div>
+        <div class="title">Сайт просит подтвердить, что вы человек</div>
         <div class="desc" id="captchaPrompt"></div>
       </div>
     </div>
@@ -503,7 +561,7 @@
       <div class="icon-box" style="background:color-mix(in srgb, var(--accent) 14%, transparent);color:var(--accent)"><i data-icon="pin15"></i></div>
       <div class="text">
         <div class="title" id="regionModalTitle">Добавить регион</div>
-        <div class="desc">Регион и график из справочника hh.ru — параметры ссылки соберутся сами.</div>
+        <div class="desc">Регион и график из справочника сайта — параметры ссылки соберутся сами.</div>
       </div>
     </div>
     <div id="areaSearchWrap" class="col" style="gap:7px">
@@ -512,7 +570,7 @@
       <div id="areaResults" class="area-results"></div>
     </div>
     <div id="areaManual" class="col" style="display:none;gap:12px">
-      <div class="hint">Справочник hh.ru сейчас недоступен — можно указать регион вручную.</div>
+      <div class="hint">Справочник сейчас недоступен — можно указать регион вручную.</div>
       <label class="field"><span class="field-label">Название</span><input type="text" id="manualName" placeholder="Москва"></label>
       <label class="field"><span class="field-label">Параметры ссылки</span><input type="text" id="manualParams" class="mono" placeholder="&amp;area=1"></label>
     </div>
@@ -520,11 +578,103 @@
       <div class="field-label">График</div>
       <div class="chips" id="scheduleChips"></div>
     </div>
+    <div class="chips" id="regionPreview"></div>
     <div class="row" style="align-items:center">
-      <div class="hint mono" id="regionPreview"></div>
       <div class="spacer" style="flex:1"></div>
       <button class="btn" id="regionModalCancel">Отмена</button>
       <button class="btn btn-primary" id="regionModalSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== МАСТЕР ПЕРВОГО ЗАПУСКА ==================== -->
+<!-- Полноэкранный, без крестика/отмены и без клика мимо — пока вход и
+     резюме не готовы, обычный интерфейс не показывается вовсе. -->
+<div class="overlay onboard" id="onboardingBox">
+  <div class="modal onboard-modal">
+    <div class="onboard-progress">
+      <div class="onboard-dot" data-step="1"></div>
+      <div class="onboard-dot" data-step="2"></div>
+      <div class="onboard-dot" data-step="3"></div>
+    </div>
+
+    <!-- Шаг 1: вход -->
+    <div class="onboard-step" id="onboardStep1">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Вход в hh.ru</div>
+          <div class="desc">Откроется окно браузера — войдите в свой аккаунт, как обычно.</div>
+        </div>
+      </div>
+      <div id="onboardLoginIdle">
+        <button class="btn btn-primary" id="btnOnboardLogin">Войти в hh.ru</button>
+      </div>
+      <div id="onboardLoginWait" style="display:none">
+        <div class="hint">Ждём вход в открывшемся окне — как только он будет виден на странице, продолжим сами.</div>
+        <button class="btn btn-small" id="btnOnboardConfirmLogin">Я вошёл — сохранить сейчас</button>
+      </div>
+      <div class="hint" id="onboardLoginError" style="display:none;color:var(--err)"></div>
+    </div>
+
+    <!-- Шаг 2: резюме -->
+    <div class="onboard-step" id="onboardStep2" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Выберите резюме</div>
+          <div class="desc">Читаем список резюме на вашем аккаунте hh.ru.</div>
+        </div>
+      </div>
+      <div class="hint" id="onboardResumesLoading">Загружаю список резюме…</div>
+      <div class="area-results" id="onboardResumesList" style="display:none"></div>
+      <div class="hint" id="onboardResumesError" style="display:none;color:var(--err)"></div>
+      <div id="onboardManualResume" style="display:none">
+        <label class="field">
+          <span class="field-label">Название резюме</span>
+          <input type="text" id="onboardManualName" placeholder="Точно как на hh.ru">
+        </label>
+        <label class="field">
+          <span class="field-label">Профиль для писем</span>
+          <textarea id="onboardManualSummary" style="min-height:200px" placeholder="Опыт, стек, достижения…"></textarea>
+        </label>
+        <div class="row" style="align-items:center;justify-content:flex-end">
+          <button class="btn btn-primary" id="btnOnboardManualFinish">Сохранить и начать работу</button>
+        </div>
+      </div>
+      <div class="row" style="align-items:center" id="onboardStep2Actions">
+        <div class="spacer" style="flex:1"></div>
+        <button class="btn" id="btnOnboardManualResume">Ввести вручную</button>
+      </div>
+    </div>
+
+    <!-- Шаг 3: профиль -->
+    <div class="onboard-step" id="onboardStep3" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Проверьте профиль</div>
+          <div class="desc">Агент пишет письма строго по этому тексту — поправьте, если что-то не так или не хватает.</div>
+        </div>
+      </div>
+      <div class="hint" id="onboardProfileLoading">Читаю резюме и собираю профиль…</div>
+      <div id="onboardProfileForm" style="display:none">
+        <label class="field">
+          <span class="field-label">Название резюме</span>
+          <input type="text" id="onboardResumeName">
+        </label>
+        <label class="field">
+          <span class="field-label">Профиль для писем<span class="spacer"></span><span class="counter" id="onboardSummaryCount">0 / 3000</span></span>
+          <textarea id="onboardResumeSummary" style="min-height:220px"></textarea>
+        </label>
+      </div>
+      <div id="onboardProfileErrorBox" style="display:none">
+        <div class="hint" id="onboardProfileError" style="color:var(--err)"></div>
+        <button class="btn" id="btnOnboardRetryProfile">Повторить</button>
+      </div>
+      <div class="row" style="align-items:center;justify-content:flex-end">
+        <button class="btn btn-primary" id="btnOnboardFinish" disabled>Всё верно, начать работу</button>
+      </div>
     </div>
   </div>
 </div>
@@ -540,6 +690,7 @@ if (location.search.includes("mock")) document.write('<script src="mock.js"><\/s
 <div class="toast" id="toast">
   <div class="light"></div>
   <div class="body"><div class="t" id="toastTitle"></div><div class="d" id="toastText"></div></div>
+  <button class="btn btn-primary btn-small" id="toastAction" style="display:none"></button>
   <button class="close" id="toastClose" title="Закрыть">&times;</button>
 </div>
 </body>

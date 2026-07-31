@@ -10,6 +10,7 @@
   if (window.pywebview) return;  // запущено в приложении — не мешаем
 
   const settings = {
+    site: { active: "hh.ru" },
     search: {
       queries: ["Тестировщик", "QA", "Инженер по тестированию", "Специалист по тестированию"],
       title_only: true,
@@ -21,6 +22,7 @@
       experience: ["between1And3", "between3And6", "moreThan6"],
       require_letter: true,
     },
+    letters: { style: "business", review_enabled: true },
     resume: {
       target_name: "Тестировщик",
       // Демонстрационный профиль: файл открывается в предпросмотре интерфейса,
@@ -46,6 +48,17 @@
     _secrets: { tg_bot_token: true, anthropic_api_key: false, openai_api_key: false },
   };
 
+  // Хвост ключа считается по хосту адреса — как и в настоящем бэкенде
+  // (settings.scoped_secret_name), чтобы в мок-превью тоже было видно, что
+  // подсказка меняется при переключении OpenRouter ↔ Gemini, а не залипает.
+  const openaiKeysByHost = { "api.groq.com": "gsk_demoDemoKeyDoNotUse1234" };
+  function hostOf(url) { try { return new URL(url).hostname; } catch { return ""; } }
+  function secretHint(value) {
+    if (!value) return null;
+    return value.length < 8 ? "••••••" : `•••••• ${value.slice(-4)}`;
+  }
+  function openaiKeyHint(url) { return secretHint(openaiKeysByHost[hostOf(url)] || ""); }
+
   // Типичные цифры за сеанс
   const stats = { viewed: 40, hard_skipped: 28, ai_pass: 7, ai_reject: 5,
                   letters: 7, applied: 5, already: 2, skipped_page: 1, apply_failed: 0 };
@@ -63,9 +76,9 @@
     ["✍️ Пишу сопроводительное — Специалист по тестированию", "info"],
     ["✅ Отклик отправлен: Специалист по тестированию", "info"],
     ["❌ ИИ отклонил: Инженер по нагрузочному тестированию (Performance QA)", "info"],
-    ["🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...", "warn"],
-    ["⏭️ Пропускаю (archived (по тексту страницы)): QA Engineer (Mobile)", "warn"],
-    ["⚠️ Не нашёл кнопку отправки отклика: QA Engineer (ITSM)", "error"],
+    ["🔒 HH показал проверку VPN — нажимаю «Я не использую VPN»...", "warn", "hh_client.handle_vpn_check:412"],
+    ["⏭️ Пропускаю (archived (по тексту страницы)): QA Engineer (Mobile)", "warn", "hh_client.search_and_apply:718"],
+    ["⚠️ Не нашёл кнопку отправки отклика: QA Engineer (ITSM)", "error", "hh_client.search_and_apply:964"],
     ["Проверка закончена: новых вакансий 6, следующая в 16:41.", "info"],
   ];
 
@@ -74,8 +87,16 @@
   // ?mock=notready показывает экран первого запуска (ничего не настроено)
   const notReady = /notready/.test(location.search);
   const setup = notReady
-    ? { browser: true, ollama_installed: true, ollama_running: true, logged_in: false, resume: false, summary: false }
-    : { browser: true, ollama_installed: true, ollama_running: true, logged_in: true, resume: true, summary: true };
+    ? { browser: true, ollama_installed: true, ollama_running: true, logged_in: false, site: "hh.ru", resume: false, summary: false }
+    : { browser: true, ollama_installed: true, ollama_running: true, logged_in: true, site: "hh.ru", resume: true, summary: true };
+
+  const SITES = [
+    { id: "hh.ru", name: "hh.ru — Россия" },
+    { id: "hh.kz", name: "hh.kz — Казахстан" },
+    { id: "hh.uz", name: "hh.uz — Узбекистан" },
+    { id: "rabota.by", name: "rabota.by — Беларусь" },
+    { id: "hh1.az", name: "hh1.az — Азербайджан" },
+  ];
 
   const models = [
     { name: "gemma4:e4b-it-qat", size_gb: 3.1, in_use: true },
@@ -84,16 +105,72 @@
 
   window.pywebview = {
     api: {
-      get_settings: () => Promise.resolve(JSON.parse(JSON.stringify(settings))),
+      get_settings: () => {
+        const s = JSON.parse(JSON.stringify(settings));
+        s._secret_hints = {
+          tg_bot_token: secretHint(s._secrets.tg_bot_token ? "123456:AADemoTelegramBotTokenDoNotUse" : ""),
+          anthropic_api_key: null,
+          openai_api_key: openaiKeyHint(settings.llm.openai_base_url),
+        };
+        s._secrets.openai_api_key = !!s._secret_hints.openai_api_key;
+        return Promise.resolve(s);
+      },
+      get_openai_key_hint: (url) => Promise.resolve({ hint: openaiKeyHint(url) }),
       // Ведём себя как настоящее приложение: сохранённый ключ дальше виден
       // только фактом наличия, само значение назад не отдаётся.
       save_settings: (d) => {
-        if (d && d._secrets && d._secrets.openai_api_key) settings._secrets.openai_api_key = true;
+        if (d && d._secrets && d._secrets.openai_api_key) {
+          const url = (d.llm && d.llm.openai_base_url) || settings.llm.openai_base_url;
+          openaiKeysByHost[hostOf(url)] = d._secrets.openai_api_key;
+          settings._secrets.openai_api_key = true;
+        }
         if (d && d.llm) Object.assign(settings.llm, d.llm);
         return ok({ path: "~/Library/Application Support/HHAgent/settings.json" });
       },
       get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
       setup_status: () => Promise.resolve(setup),
+      get_sites: () => Promise.resolve({ sites: SITES, active: settings.site.active }),
+      set_active_site: (id) => { settings.site.active = id; setup.site = id; return ok(); },
+      install_camoufox: () => {
+        setTimeout(() => {
+          setup.browser = true;
+          window.onAgentEvent("setup_done", { ok: true, message: "Camoufox установлен." });
+        }, 1000);
+        return ok();
+      },
+      confirm_login: () => ok(),
+      wizard_login: () => {
+        setTimeout(() => window.onAgentEvent("await_login", { site: "hh.ru" }), 200);
+        setTimeout(() => window.onAgentEvent("wizard_login_done", { ok: true, site: "hh.ru" }), 1400);
+        return ok();
+      },
+      wizard_list_resumes: () => {
+        setTimeout(() => window.onAgentEvent("wizard_resumes_done", { ok: true, resumes: [
+          { title: "Тестировщик", url: "https://hh.ru/resume/aaa111bbb222" },
+          { title: "QA Engineer (английский intermediate)", url: "https://hh.ru/resume/ccc333ddd444" },
+        ] }), 800);
+        return ok();
+      },
+      wizard_condense_resume: () => {
+        setTimeout(() => window.onAgentEvent("wizard_profile_done", { ok: true, summary:
+          "Middle QA Engineer с коммерческим опытом более 3 лет в продуктовой и заказной разработке.\n\n" +
+          "Сейчас работаю в продуктовой команде: тестирую web и API, отвечаю за релизы и разбор инцидентов на проде.\n\n" +
+          "Стек: JavaScript, Playwright, Postman, Git, Docker, PostgreSQL, REST, SOAP, XML." }), 1200);
+        return ok();
+      },
+      get_letter_styles: () => Promise.resolve({ styles: [
+        { id: "signature", name: "С характером", desc: "Живой голос, цепляющее начало, один личный акцент. Заметнее в потоке, но подходит не всем работодателям." },
+        { id: "business", name: "Деловой", desc: "Ровный профессиональный тон, 3–4 абзаца. Так письма писались до сих пор." },
+        { id: "strict", name: "Сдержанный", desc: "Короткое официальное письмо: только соответствие требованиям, без эмоций." },
+      ] }),
+      get_openai_presets: () => Promise.resolve({ presets: [
+        { name: "OpenRouter", url: "https://openrouter.ai/api/v1", note: "есть бесплатные модели, ключ обязателен" },
+        { name: "Mistral", url: "https://api.mistral.ai/v1", note: "ключ обязателен" },
+        { name: "Groq", url: "https://api.groq.com/openai/v1", note: "быстрый, ключ обязателен" },
+        { name: "Google Gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai", note: "есть бесплатный лимит, ключ обязателен" },
+        { name: "LM Studio", url: "http://localhost:1234/v1", note: "локально, ключ не нужен" },
+        { name: "OpenAI", url: "https://api.openai.com/v1", note: "ключ обязателен" },
+      ] }),
       list_models: () => {
         // Для облачного провайдера отдаём длинный список, как у OpenRouter,
         // чтобы проверялись фильтр и счётчик
@@ -157,8 +234,8 @@
         window.onAgentEvent("pause", { seconds: 600 });
         return;
       }
-      const [line, level] = LOG[i++];
-      window.onAgentEvent("log", { line, level });
+      const [line, level, origin] = LOG[i++];
+      window.onAgentEvent("log", { line, level, origin });
       window.onAgentEvent("stats", stats);
     }, 900);
   }

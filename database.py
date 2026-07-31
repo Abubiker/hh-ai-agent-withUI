@@ -18,6 +18,13 @@ def init_db():
             applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # style — каким стилем было написано сопроводительное (см. ai_analyzer.
+    # LETTER_STYLES), NULL если письмо не прикладывалось. Добавлено позже
+    # исходной таблицы — ALTER TABLE, а не пересоздание: строки существующих
+    # пользователей не трогаем.
+    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(applied_jobs)")}
+    if "style" not in existing_cols:
+        cursor.execute("ALTER TABLE applied_jobs ADD COLUMN style TEXT")
     # Таблица для истории сообщений чатов
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -37,6 +44,28 @@ def init_db():
             last_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Вакансии, отсеянные стоп-словом, для которых уже была напечатана строка
+    # «⏩ Пропускаю». Раньше это жило только в памяти (_skip_logged) — после
+    # перезапуска приложения те же ~28 строк печатались заново на каждую
+    # уже виденную вакансию. Сам стоп-фильтр по-прежнему проверяет каждую
+    # вакансию каждый раз (правки стоп-слов должны действовать и на старые) —
+    # эта таблица подавляет только повторный ЛОГ, не саму проверку.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seen_skips (
+            id TEXT PRIMARY KEY,
+            seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    # Вердикт ИИ по хешу (профиль + фильтры + вакансия, см. ai_analyzer.
+    # _verdict_cache_key) — настоящий перепост (тот же текст под новым id)
+    # не должен каждый раз заново уходить в модель.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS verdict_cache (
+            hash TEXT PRIMARY KEY,
+            verdict TEXT,
+            cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -48,10 +77,11 @@ def is_job_applied(job_id: str) -> bool:
     conn.close()
     return result is not None
 
-def add_applied_job(job_id: str, title: str, url: str):
+def add_applied_job(job_id: str, title: str, url: str, style: str | None = None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO applied_jobs (id, title, url) VALUES (?, ?, ?)", (job_id, title, url))
+    cursor.execute("INSERT INTO applied_jobs (id, title, url, style) VALUES (?, ?, ?, ?)",
+                   (job_id, title, url, style))
     conn.commit()
     conn.close()
 
@@ -68,6 +98,43 @@ def bump_failed_response(job_id: str, title: str) -> int:
         "SELECT attempts FROM failed_responses WHERE id = ?", (job_id,)).fetchone()[0]
     conn.close()
     return attempts
+
+
+def load_seen_skips() -> set[str]:
+    """Все id, для которых строка «⏩ Пропускаю» уже была напечатана раньше —
+    загружается один раз при старте клиента, дальше живёт в памяти как и
+    раньше (per-vacancy запрос к sqlite на каждый проход выдачи был бы
+    лишним расходом ради строки, которая и так не пишется в базу)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM seen_skips")
+    ids = {row[0] for row in cursor.fetchall()}
+    conn.close()
+    return ids
+
+def mark_skip_seen(job_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO seen_skips (id) VALUES (?)", (job_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_cached_verdict(cache_key: str) -> str | None:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT verdict FROM verdict_cache WHERE hash = ?", (cache_key,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_cached_verdict(cache_key: str, verdict: str):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO verdict_cache (hash, verdict) VALUES (?, ?)",
+                   (cache_key, verdict))
+    conn.commit()
+    conn.close()
 
 
 def is_message_processed(msg_id: str) -> bool:

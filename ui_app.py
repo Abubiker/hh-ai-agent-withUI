@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import traceback
@@ -36,12 +37,40 @@ if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
 
 import webview
 
+import applog
 import control
+import sites
 from settings import settings
 from notify_sinks import build_sinks
 from stats import Stats
 
 UI_DIR = Path(__file__).parent / "ui"
+
+
+def _secret_hint(value: str) -> str | None:
+    """«•••••• 4f2a» — видно и что ключ сохранён, и какой именно (хвост
+    отличает Groq от Gemini после переключения). Короткие/тестовые значения
+    (<8 символов) — только маска, хвост из них раскрывал бы ключ почти
+    целиком."""
+    if not value:
+        return None
+    if len(value) < 8:
+        return "••••••"
+    return f"•••••• {value[-4:]}"
+
+
+def _openai_key_hint(base_url: str) -> str | None:
+    """Ключ OpenAI-совместимого сервиса скоупится по хосту (settings.
+    scoped_secret_name); если своего ключа нет, get_scoped_secret молча
+    откатывается на общий бесскоупный слот — тогда подсказка помечается,
+    что это ключ ДРУГОГО сервиса, а не текущего."""
+    scoped_name = settings.scoped_secret_name("openai_api_key", base_url)
+    scoped_value = settings.get_secret(scoped_name)
+    value = scoped_value or settings.get_secret("openai_api_key")
+    hint = _secret_hint(value)
+    if hint and not scoped_value and value:
+        hint += " — общий ключ"
+    return hint
 
 
 class LogTee:
@@ -53,7 +82,11 @@ class LogTee:
         self._buffer = ""
 
     def write(self, text):
-        self._original.write(text)
+        # В собранном .app (HHAgent.spec: console=False) sys.stdout/stderr
+        # могут быть None — раньше это падало прямо на первом print() после
+        # старта. Тeéм stderr наравне со stdout, поэтому проверка обязательна.
+        if self._original is not None:
+            self._original.write(text)
         self._buffer += text
         while "\n" in self._buffer:
             line, self._buffer = self._buffer.split("\n", 1)
@@ -64,7 +97,8 @@ class LogTee:
                     pass  # проблемы с окном не должны ронять агента
 
     def flush(self):
-        self._original.flush()
+        if self._original is not None:
+            self._original.flush()
 
     def isatty(self):
         return False
@@ -90,10 +124,15 @@ class AgentBridge:
         self.started_at = None
         self._captcha_future = None
         self._stdout_backup = None
+        self._stderr_backup = None
         # История чата — только в памяти, на диск не пишется: разговор
         # эфемерный, обнуляется при перезапуске приложения.
         self._chat_history: list[dict] = []
         self._chat_busy = False
+        # Гвард на мастер первого запуска: без него повторный клик «Войти»
+        # (пока первая попытка ещё ждёт вход) открывал ВТОРОЙ браузер поверх
+        # первого — оба висели и ждали, каждый со своим окном.
+        self._wizard_login_busy = False
 
     # ---------- служебное ----------
 
@@ -114,7 +153,30 @@ class AgentBridge:
             pass
 
     def _log(self, line: str, level: str = "info"):
-        self._emit("log", {"line": line, "level": level})
+        import applog
+        # origin считаем один раз здесь и передаём в applog.log() готовым —
+        # обход кадров skip-листами (ui_app.py целиком, LogTee.write/_log)
+        # даёт тот же результат что и повторный подсчёт внутри log(), но
+        # дважды его вычислять незачем.
+        where = applog.origin(depth=2)
+        applog.log(line, level, origin_hint=where)
+        payload = {"line": line, "level": level}
+        # Origin в JS-событие — ТОЛЬКО у ошибок/предупреждений. В line его
+        # не добавляем ни в каком виде: app.js разбирает строки регулярками
+        # с якорем ^ (LOG_PATTERNS, updateNowFromLog) — префикс их сломает.
+        if level in ("error", "warn"):
+            payload["origin"] = where
+        self._emit("log", payload)
+
+    def _log_stderr(self, line: str):
+        """stderr раньше не перехватывался вовсе — необработанный traceback
+        не попадал ни в файл, ни в окно. В файл — как error (это и есть
+        обычно traceback), в окно — как warn: один traceback на 15+ строк
+        покрасил бы половину журнала в красный и раздул счётчик «Ошибки»."""
+        import applog
+        where = applog.origin(depth=2)
+        applog.log(line, "error", origin_hint=where)
+        self._emit("log", {"line": line, "level": "warn", "origin": where})
 
     def _start_loop(self):
         """Поднимает фоновый поток с собственным циклом событий."""
@@ -139,6 +201,21 @@ class AgentBridge:
 
     # ---------- настройки ----------
 
+    def get_letter_styles(self):
+        """Список стилей сопроводительного для карточки на вкладке «Резюме».
+        Названия/описания живут в ai_analyzer.LETTER_STYLES — JS их не
+        хардкодит, чтобы нейминг менялся в одном месте."""
+        import ai_analyzer
+        return {"styles": ai_analyzer.LETTER_STYLES}
+
+    def get_openai_presets(self):
+        """Готовые адреса OpenAI-совместимых сервисов для вкладки «Модель».
+        Список живёт в llm_providers.OPENAI_PRESETS — тот же список уже
+        использует мастер первого запуска, JS его не дублирует."""
+        from llm_providers import OPENAI_PRESETS
+        return {"presets": [{"name": n, "url": u, "note": note}
+                            for n, u, note in OPENAI_PRESETS]}
+
     def get_settings(self):
         data = json.loads(json.dumps(settings.data))  # копия для интерфейса
         # Секреты не отдаём целиком: показываем только факт их наличия.
@@ -150,7 +227,21 @@ class AgentBridge:
             "openai_api_key": bool(settings.get_scoped_secret(
                 "openai_api_key", settings.data["llm"]["openai_base_url"])),
         }
+        # Хвост ключа — отдельным полем, НЕ подменяет _secrets выше: тот
+        # булев контракт двусторонний (save_settings шлёт туда настоящие
+        # значения), а хвост — только для отображения.
+        data["_secret_hints"] = {
+            "tg_bot_token": _secret_hint(settings.get_secret("tg_bot_token")),
+            "anthropic_api_key": _secret_hint(settings.get_secret("anthropic_api_key")),
+            "openai_api_key": _openai_key_hint(settings.data["llm"]["openai_base_url"]),
+        }
         return data
+
+    def get_openai_key_hint(self, base_url):
+        """Вкладка «Модель» спрашивает это ДО сохранения, сразу при смене
+        сервиса — иначе после Groq → Gemini подпись «сохранён» относилась бы
+        к ключу Groq, а не к (пока ещё пустому) ключу Gemini."""
+        return {"hint": _openai_key_hint(base_url)}
 
     def save_settings(self, incoming):
         try:
@@ -162,6 +253,16 @@ class AgentBridge:
                 "openai_base_url") or settings.data["llm"]["openai_base_url"]
             for key, value in secrets.items():
                 if not value:  # пустое поле означает «не менять»
+                    continue
+                if "•" in value:
+                    # Подсказка-хвост случайно попала в поле как значение
+                    # (например, автосейв дёрнул поле раньше, чем JS его
+                    # очистил) — это не ключ, записывать нельзя.
+                    continue
+                if key == "tg_bot_token" and not re.match(r"^\d+:\S+$", value):
+                    # Токен бота имеет вид "123456:AAExxx" — форма, непохожая
+                    # на это, почти всегда обрезок от битого автосейва
+                    # (см. фикс #tgToken на смену листенера с input на change).
                     continue
                 if key == "openai_api_key":
                     settings.set_scoped_secret(key, base_url, value)
@@ -260,6 +361,15 @@ class AgentBridge:
         if fut and not fut.done():
             # Future принадлежит фоновому циклу — трогаем его только оттуда.
             self.loop.call_soon_threadsafe(fut.set_result, text or None)
+        return {"ok": True}
+
+    def confirm_login(self):
+        """Пользователь нажал «Я вошёл — сохранить сейчас»: подстраховка
+        поверх авто-детекта входа в login_if_needed(), на случай если
+        разметка hh изменится и локатор перестанет находить признак входа.
+        Событие принадлежит фоновому циклу — трогаем его только оттуда."""
+        if self.client and self.client.login_confirm_event:
+            self.loop.call_soon_threadsafe(self.client.login_confirm_event.set)
         return {"ok": True}
 
     # ---------- чат ----------
@@ -400,6 +510,21 @@ class AgentBridge:
 
     # ---------- запуск и остановка ----------
 
+    async def _login_client(self, client) -> bool:
+        """Общий вход для start_agent() и мастера первого запуска
+        (wizard_login): заводит confirm-event — подстраховку к авто-детекту
+        («Я вошёл — сохранить сейчас»), эмитит await_login на время
+        ожидания и гасит его после. Возвращает logged_in."""
+        client.login_confirm_event = asyncio.Event()
+        already_logged_in = sites.is_logged_in(client.site)
+        if not already_logged_in:
+            self._emit("await_login", {"site": client.site["host"]})
+        try:
+            return await client.login_if_needed()
+        finally:
+            if not already_logged_in:
+                self._emit("await_login", None)
+
     def start_agent(self, session_minutes=0):
         if self.running:
             return {"ok": False, "error": "Агент уже работает"}
@@ -437,7 +562,8 @@ class AgentBridge:
                 self.client = client
 
                 await client.start()
-                if not await client.login_if_needed():
+                logged_in = await self._login_client(client)
+                if not logged_in:
                     self._log("Не удалось авторизоваться на HH.", "error")
                     return
 
@@ -449,21 +575,34 @@ class AgentBridge:
 
                 while not control.should_stop():
                     fresh_before = client.stats.fresh
+                    db_skipped_before = client.stats.db_skipped
                     try:
+                        # Обе фазы цикла ловятся одним except ниже — без
+                        # маркера в файловом логе не понять, какая из двух
+                        # упала (только file, debug: в UI это был бы шум).
+                        applog.log("цикл: search_and_apply", level="debug")
                         await client.search_and_apply(sinks.notify)
+                        applog.log("цикл: check_chats", level="debug")
                         await client.check_chats(sinks.notify)
                     except Exception as e:
                         self._log(f"Ошибка в цикле агента: {e}", "error")
+                        applog.exc()
                     self._emit("stats", client.stats.__dict__)
                     if control.should_stop():
                         break
                     pause = settings.cycle_pause_minutes
                     next_at = _time.strftime("%H:%M", _time.localtime(_time.time() + pause * 60))
+                    # Видимость дедупа: одни и те же вакансии в выдаче — это
+                    # нормально (объявления не пропадают), их отсекает база ДО
+                    # модели, без токенов. Без счётчика казалось, что агент
+                    # заново их обрабатывает.
+                    db_skipped = client.stats.db_skipped - db_skipped_before
+                    skip_note = f" (пропущено {db_skipped} уже обработанных)" if db_skipped else ""
                     if client.stats.fresh == fresh_before:
-                        self._log(f"Новых вакансий не появилось. Следующая проверка в {next_at}.")
+                        self._log(f"Новых вакансий не появилось.{skip_note} Следующая проверка в {next_at}.")
                     else:
-                        self._log(f"Проверка закончена: новых вакансий {client.stats.fresh - fresh_before}, "
-                                  f"следующая в {next_at}.")
+                        self._log(f"Проверка закончена: новых вакансий {client.stats.fresh - fresh_before},"
+                                  f"{skip_note} следующая в {next_at}.")
                     # Отдельное событие для обратного отсчёта в интерфейсе
                     self._emit("pause", {"seconds": pause * 60})
                     await control.sleep_or_stop(pause * 60)
@@ -503,6 +642,84 @@ class AgentBridge:
     def get_state(self):
         stats = self.client.stats.__dict__ if self.client else Stats().__dict__
         return {"running": self.running, "stats": stats, "started_at": self.started_at}
+
+    # ---------- мастер первого запуска ----------
+    #
+    # Три моста ниже — все "долгие" (вход до 10 минут, сетевые загрузки
+    # страниц, вызов модели), поэтому не блокируют сам мост: сразу отдают
+    # {"ok": True} и шлют результат отдельным событием — тот же приём, что
+    # у pull_model() ниже по файлу.
+
+    def wizard_login(self):
+        """Разовый вход БЕЗ старта поиска вакансий — отдельный throwaway
+        HHClient, закрывается сразу после результата. Шаг «Вход» мастера
+        первого запуска; обычный «Запустить» логинится сам внутри
+        start_agent() и этот мост не использует.
+
+        Гвард на повторный вызов, пока первый ещё не завершился: без него
+        нетерпеливый повторный клик «Войти» открывал ВТОРОЙ (и третий)
+        браузер поверх ещё не закрывшегося первого — окна множились, и
+        confirm_login() мог достучаться только до последнего self.client,
+        оставляя более ранние висеть до 10-минутного таймаута."""
+        if self._wizard_login_busy:
+            return {"ok": False, "error": "Вход уже выполняется — подождите текущее окно."}
+        self._wizard_login_busy = True
+        from hh_client import HHClient
+
+        async def run():
+            client = HHClient()
+            self.client = client
+            try:
+                await client.start()
+                logged_in = await self._login_client(client)
+                self._emit("wizard_login_done", {"ok": logged_in, "site": client.site["host"]})
+            except Exception as e:
+                self._emit("wizard_login_done", {"ok": False, "error": str(e)})
+            finally:
+                self._wizard_login_busy = False
+                try:
+                    await client.stop()
+                except Exception:
+                    pass
+                if self.client is client:
+                    self.client = None
+
+        self._submit(run())
+        return {"ok": True}
+
+    def wizard_list_resumes(self):
+        """Резюме соискателя для шага «Резюме» мастера — результат
+        событием wizard_resumes_done: {"ok","resumes":[{title,url}],"error"}."""
+        import resume_reader
+
+        async def run():
+            try:
+                resumes = await resume_reader.list_my_resumes()
+                self._emit("wizard_resumes_done", {"ok": True, "resumes": resumes})
+            except Exception as e:
+                self._emit("wizard_resumes_done", {"ok": False, "error": str(e)})
+
+        self._submit(run())
+        return {"ok": True}
+
+    def wizard_condense_resume(self, url: str):
+        """Читает выбранное резюме и просит модель собрать из него профиль
+        (черновик — пользователь проверяет/правит его на шаге «Профиль»,
+        прежде чем он попадёт в настройки). Результат событием
+        wizard_profile_done: {"ok","summary","error"}."""
+        import resume_reader
+        import ai_analyzer
+
+        async def run():
+            try:
+                text = await resume_reader.fetch_resume_text(url)
+                summary = await ai_analyzer.condense_resume(text)
+                self._emit("wizard_profile_done", {"ok": True, "summary": summary})
+            except Exception as e:
+                self._emit("wizard_profile_done", {"ok": False, "error": str(e)})
+
+        self._submit(run())
+        return {"ok": True}
 
     # ---------- прочее ----------
 
@@ -558,20 +775,6 @@ class AgentBridge:
         except Exception as e:
             return {"error": str(e)}
 
-    def install_browser(self):
-        """Ставит Chromium: внутрь приложения он не входит осознанно."""
-        import first_run
-
-        async def run():
-            self._log("Устанавливаю браузер для Playwright…")
-            ok, msg = await first_run.install_browser(
-                on_progress=lambda line: self._log(line))
-            self._log(("✅ " if ok else "❌ ") + msg, "info" if ok else "error")
-            self._emit("setup_done", {"ok": ok, "message": msg})
-
-        self._submit(run())
-        return {"ok": True}
-
     def open_url(self, url: str):
         """Открывает ссылку в браузере пользователя (например, страницу Ollama)."""
         if not url.startswith(("http://", "https://")):
@@ -606,17 +809,55 @@ class AgentBridge:
         return {"ok": False, "error": last}
 
     def get_areas(self):
-        """Справочник регионов hh.ru для модалки выбора. При недоступном API
-        (не-РФ сеть отдаёт 403) интерфейс переключается на ручной ввод."""
+        """Справочник регионов активной площадки для модалки выбора. При
+        недоступном API (не-РФ сеть отдаёт 403) интерфейс переключается на
+        ручной ввод. Список сужается до страны активной площадки, если кэш
+        уже содержит нужную для этого разметку (см. hh_api.country_subtree)."""
         import hh_api
         try:
             areas, source = self._submit(hh_api.fetch_areas()).result(timeout=15)
+            areas = hh_api.country_subtree(areas, sites.active_site().get("area"))
             return {"ok": True, "areas": areas, "source": source,
                     "schedules": hh_api.SCHEDULES}
         except Exception as e:
             import hh_api as _h
             return {"ok": False, "areas": [], "source": "none",
                     "schedules": _h.SCHEDULES, "error": str(e)}
+
+    # ---------- площадка (hh.ru / hh.kz / ...) ----------
+
+    def get_sites(self):
+        return {"sites": sites.all_sites(), "active": sites.active_site()["id"]}
+
+    def set_active_site(self, site_id: str):
+        """Меняет активную площадку. Запрещено во время работы агента: он
+        держит открытым браузер и context, привязанные к площадке, с которой
+        стартовал, — подмена активной площадки на середине сеанса рассинхронит
+        self.client.site с settings.active_site_id, из-за чего фильтр регионов
+        начнёт отдавать пустой список для уже бегущего клиента."""
+        if self.running:
+            return {"ok": False, "error": "Остановите агента, чтобы сменить сайт поиска."}
+        if not sites.by_id(site_id):
+            return {"ok": False, "error": f"Неизвестный сайт: {site_id}"}
+        settings.data.setdefault("site", {})["active"] = site_id
+        settings.save()
+        return {"ok": True}
+
+    def install_camoufox(self):
+        """Качает единственный поддерживаемый браузер — Camoufox (~700 МБ).
+        Прогресс идёт строками в общий лог, по готовности переигрывается
+        чек-лист готовности (setup_done)."""
+        import first_run
+
+        async def run():
+            self._log("Устанавливаю Camoufox (~700 МБ, может занять пару минут)…")
+            ok, msg = await first_run.install_camoufox(
+                on_progress=lambda line: self._log(line))
+            self._log(("✅ " if ok else "❌ ") + msg, "info" if ok else "error")
+            self._emit("setup_done", {"ok": ok, "message": msg})
+
+        self._submit(run())
+        return {"ok": True}
 
     def open_ollama_app(self):
         """Поднимает Ollama — используется в баннере «модель не отвечает».
@@ -656,15 +897,17 @@ class AgentBridge:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def install_hint(self):
-        """Данные для мастера первого запуска."""
-        from playwright._impl._driver import compute_driver_executable  # noqa: F401
-        browsers = Path.home() / "Library" / "Caches" / "ms-playwright"
-        return {
-            "browser_installed": browsers.exists() and any(browsers.glob("chromium*")),
-            "logged_in": (Path(__file__).parent / "state.json").exists(),
-            "resume_set": bool(settings.target_resume_name),
-        }
+    def open_logs_folder(self):
+        import subprocess
+        import applog
+        applog._ensure_handler()  # чтобы папка точно существовала к открытию
+        opener = ("open" if sys.platform == "darwin"
+                  else "explorer" if os.name == "nt" else "xdg-open")
+        try:
+            subprocess.Popen([opener, str(applog.LOG_DIR)])
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
 
 def _make_icon_image(running: bool):
@@ -769,8 +1012,9 @@ def selftest():
         # только в момент запуска агента.
         print("\nмодули агента:")
         for mod in ("hh_client", "database", "ai_analyzer", "llm_providers",
-                    "notify_sinks", "tg_bot", "control", "playwright_stealth",
-                    "resume_reader", "chat_analyzer", "quick_apply"):
+                    "notify_sinks", "tg_bot", "control",
+                    "resume_reader", "chat_analyzer", "quick_apply",
+                    "sites", "hh_session", "hh_api", "camoufox"):
             try:
                 __import__(mod)
                 print(f"  ✅ {mod}")
@@ -805,9 +1049,63 @@ def _bundle_id():
         return f"(не определить: {e})"
 
 
+# Порт-маркер единственного экземпляра. Без него каждый повторный запуск
+# .app (например, повторный клик по иконке, пока предыдущий процесс ещё жив —
+# в том числе завис после сбоя) открывал ЕЩЁ ОДНО окно поверх старого,
+# и создавалось впечатление, что при каждом старте появляется новое окно.
+SINGLE_INSTANCE_PORT = 47821
+
+
+def _wake_running_instance() -> bool:
+    """True, если приложение уже запущено (порт-маркер занят) — уже
+    работающему окну послано «покажись», а этот процесс должен просто выйти,
+    не открывая своего окна."""
+    try:
+        with socket.create_connection(("127.0.0.1", SINGLE_INSTANCE_PORT), timeout=0.5) as s:
+            s.sendall(b"show")
+        return True
+    except OSError:
+        return False
+
+
+def _listen_for_second_launch(bridge):
+    """Слушает порт-маркер и по любому подключению поднимает окно наверх —
+    см. _wake_running_instance()."""
+    try:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+        server.listen(1)
+    except OSError:
+        return  # порт занят чем-то посторонним — не критично, просто без будильника
+
+    def loop():
+        while True:
+            try:
+                conn, _ = server.accept()
+                conn.close()
+                if bridge.window:
+                    bridge.window.show()
+            except Exception:
+                break
+
+    threading.Thread(target=loop, daemon=True, name="single-instance-listener").start()
+
+
 def main():
     if os.environ.get("HHAGENT_SELFTEST") or "--selftest" in sys.argv:
         sys.exit(selftest())
+
+    if _wake_running_instance():
+        print("ℹ️ Приложение уже запущено — показываю существующее окно вместо нового.")
+        return
+
+    # CLI (main.py) делает это первой строкой; здесь его не было вовсе —
+    # agent.db создавался только у тех, кто хоть раз запускал main.py
+    # руками. У остальных первое обращение к applied_jobs падало с
+    # "no such table" прямо в середине первого поиска.
+    from database import init_db
+    init_db()
 
     bridge = AgentBridge()
     window = webview.create_window(
@@ -825,10 +1123,17 @@ def main():
         text_select=True,
     )
     bridge.window = window
+    _listen_for_second_launch(bridge)
 
     # Перехватываем вывод агента, чтобы он был виден в окне
     bridge._stdout_backup = sys.stdout
     sys.stdout = LogTee(sys.stdout, lambda line: bridge._log(line))
+    # stderr раньше не перехватывался вовсе — необработанный traceback не
+    # попадал ни в файл, ни в окно, и о зависании/падении было не узнать
+    # иначе как через Console.app. _log_stderr пишет его в файл как error,
+    # в окно — как warn (без этого один traceback красит весь журнал).
+    bridge._stderr_backup = sys.stderr
+    sys.stderr = LogTee(sys.stderr, lambda line: bridge._log_stderr(line))
 
     # Иконку в строке меню поднимаем ДО webview.start(): на macOS она не
     # заводит свой цикл событий, а пользуется тем, который создаст интерфейс.
@@ -856,6 +1161,7 @@ def main():
             except Exception:
                 pass
         sys.stdout = bridge._stdout_backup
+        sys.stderr = bridge._stderr_backup
         if bridge.running and bridge.loop:
             bridge.loop.call_soon_threadsafe(control.request_stop)
 

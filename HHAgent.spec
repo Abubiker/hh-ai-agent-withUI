@@ -3,13 +3,15 @@
 
 Осознанные решения:
 
-1. Браузер Chromium НЕ кладём внутрь приложения. Playwright плохо дружит с
-   PyInstaller (пути к браузеру ломаются), да и это +150 МБ. Вместо этого
-   приложение при первом запуске проверяет наличие браузера и предлагает его
-   установить — см. ensure_browser() в first_run.py.
+1. Браузер (Camoufox, ~700 МБ) НЕ кладём внутрь приложения. С PyInstaller у
+   таких бинарников ломаются пути к исполняемому файлу, да и размер
+   приложения вырос бы в разы. Вместо этого приложение при первом запуске
+   проверяет наличие браузера и предлагает его установить —
+   см. first_run.install_camoufox().
 
 2. Драйвер Playwright (node-обёртка, ~128 МБ) нужен обязательно, иначе
-   playwright не запустится вообще.
+   playwright не запустится вообще — Camoufox запускается через тот же
+   Playwright API, просто с другим бинарником браузера.
 
 3. После сборки .app ОБЯЗАТЕЛЬНО подписать (хотя бы ad-hoc): macOS не
    показывает уведомления от неподписанных программ. Этим занимается
@@ -30,12 +32,18 @@ datas += collect_data_files("playwright", include_py_files=True)
 # Звук и иконка уведомлений: без них desktop_notifier падает с
 # "No module named 'desktop_notifier.resources'"
 datas += collect_data_files("desktop_notifier", include_py_files=True)
-# playwright_stealth тащит за собой JS-скрипты; без них падает даже импорт,
-# а вместе с ним и весь модуль агента
-datas += collect_data_files("playwright_stealth", include_py_files=True)
+# Camoufox (единственный поддерживаемый браузер — см. hh_session.py) и его
+# зависимости по генерации отпечатков тащат JSON/JS/шрифты/SQLite — без них
+# даже голый `import camoufox` не падает, но подмена отпечатка отваливается
+# в рантайме без внятной ошибки.
+datas += collect_data_files("camoufox", include_py_files=True)
+datas += collect_data_files("browserforge", include_py_files=True)
+datas += collect_data_files("apify_fingerprint_datapoints", include_py_files=True)
+# Тянется camoufox'ом транзитивно (через browserforge) — без JSON-словарей
+# в data/json падает уже на "import camoufox", не только в рантайме.
+datas += collect_data_files("language_tags", include_py_files=True)
 
 hiddenimports = [
-    "playwright_stealth",
     "webview.platforms.cocoa",
     "pystray._darwin",
     "desktop_notifier.backends.macos",
@@ -44,6 +52,7 @@ hiddenimports = [
     "aiogram",
 ]
 hiddenimports += collect_submodules("playwright")
+hiddenimports += collect_submodules("camoufox")
 
 a = Analysis(
     ["ui_app.py"],
@@ -53,8 +62,9 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    # Тянуть за собой не нужно: это тяжёлые зависимости, которых нет в коде
-    excludes=["tkinter", "matplotlib", "numpy", "pytest", "PyInstaller"],
+    # numpy убран из исключений: его тянет camoufox прямо на "import camoufox",
+    # без него голый импорт модуля падает в собранном .app.
+    excludes=["tkinter", "matplotlib", "pytest", "PyInstaller"],
     noarchive=False,
 )
 

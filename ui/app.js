@@ -11,7 +11,6 @@ const state = {
   setup: null,
   logs: [],          // {time, level, text, important}
   filter: "all",
-  logAll: false,      // "показать всё" снял ограничение в 300 строк
   now: { query: null, region: null, page: null, round: 0, vacancy: null, phase: null, phaseAt: 0 },
   saveTimer: null,
   timerInterval: null,
@@ -26,13 +25,36 @@ function fmtDuration(ms) {
 
 /* ================= настройки: загрузка / сбор / сохранение ================= */
 
+const DEFAULT_SECRET_PLACEHOLDER = "оставьте пустым — не изменится";
+
+/** Хвост ключа в placeholder (не в value — контракт «пустое поле = не
+ * менять» остаётся правдой без всякого sentinel-значения). Один вызов на
+ * все три поля вместо трёх голых if — раньше без else подсказка не
+ * сбрасывалась, и после переключения на пустой сервис поле молча
+ * продолжало выглядеть заполненным чужим ключом. */
+function renderSecretHints(s) {
+  const hints = (s && s._secret_hints) || {};
+  for (const [elId, key] of [["tgToken", "tg_bot_token"],
+                              ["anthropicKey", "anthropic_api_key"],
+                              ["openaiKey", "openai_api_key"]]) {
+    const el = $(elId);
+    const hint = hints[key];
+    el.placeholder = hint || DEFAULT_SECRET_PLACEHOLDER;
+    el.classList.toggle("has-secret", !!hint);
+  }
+}
+
 async function loadSettings() {
   const s = await api().get_settings();
   state.settings = s;
 
+  await renderSiteSeg();
+
   $("resumeName").value = s.resume.target_name || "";
   $("resumeSummary").value = s.resume.summary || "";
   updateSummaryCount();
+  await renderLetterStyles();
+  setSwitch("letterReviewSwitch", s.letters.review_enabled !== false);
 
   renderQueryChips();
   setSwitch("titleOnlySwitch", !!s.search.title_only);
@@ -51,6 +73,7 @@ async function loadSettings() {
   // иначе в подсказке оказывалось «≈ 0 страниц».
   updateMaxPagesHint();
   updateQueriesInfo();
+  resetFrDirty();
 
   $("providerSeg").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.p === s.llm.provider));
   syncProviderFields();
@@ -58,6 +81,7 @@ async function loadSettings() {
   $("openaiUrl").value = s.llm.openai_base_url;
   $("openaiModel").value = s.llm.openai_model || "";
   $("anthropicModel").value = s.llm.anthropic_model || "";
+  await renderOpenaiPresets();
   // Пресет сервиса подсвечиваем, если адрес совпал с известным
   $("openaiPreset").value =
     [...$("openaiPreset").options].some(o => o.value === s.llm.openai_base_url)
@@ -67,9 +91,7 @@ async function loadSettings() {
   const isKnown = known.includes(s.llm.anthropic_model);
   $("anthropicPreset").value = isKnown ? s.llm.anthropic_model : "";
   $("anthropicManualWrap").style.display = isKnown ? "none" : "";
-  if (s._secrets.tg_bot_token) $("tgToken").placeholder = "сохранён — оставьте пустым";
-  if (s._secrets.anthropic_api_key) $("anthropicKey").placeholder = "сохранён — оставьте пустым";
-  if (s._secrets.openai_api_key) $("openaiKey").placeholder = "сохранён — оставьте пустым";
+  renderSecretHints(s);
 
   setSwitch("desktopSwitch", !!s.notifications.desktop_enabled);
   setSwitch("telegramSwitch", !!s.notifications.telegram_enabled);
@@ -94,6 +116,7 @@ function collect() {
   const regions = state._regions || [];
   return {
     resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
+    letters: { style: activeLetterStyle(), review_enabled: hasClass("letterReviewSwitch", "on") },
     search: {
       queries: state._queries || [],
       title_only: hasClass("titleOnlySwitch", "on"),
@@ -183,14 +206,76 @@ function updateSidebarFooter() {
   $("providerName").title = name || "";
 }
 
+/* ================= Фильтры/Резюме: сохранение по кнопке ================= */
+// В отличие от остальных вкладок (автосохранение с задержкой), здесь правки
+// не должны улетать в файл сами по себе — слишком легко случайно испортить
+// профиль или список запросов и не заметить. Регионы (тумблер вкл/выкл и
+// модалка добавления) и выбор сайта — исключение: они и так уже требуют
+// явного действия и общие с быстрым переключением на вкладке «Работа»,
+// поэтому остаются мгновенными, как раньше.
+
+function frSnapshot() {
+  return JSON.stringify({
+    resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
+    style: activeLetterStyle(),
+    reviewEnabled: hasClass("letterReviewSwitch", "on"),
+    queries: state._queries || [],
+    title_only: hasClass("titleOnlySwitch", "on"),
+    require_letter: hasClass("requireLetterSwitch", "on"),
+    exclusions: $("exclusions").value,
+    max_pages: $("maxPagesVal").textContent,
+    pause: $("pauseVal").textContent,
+    experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),
+  });
+}
+
+function markFrDirty() {
+  const dirty = frSnapshot() !== state._frSaved;
+  for (const tab of ["filters", "resume"]) {
+    $(`btn${tab[0].toUpperCase()}${tab.slice(1)}Save`).disabled = !dirty;
+    $(`btn${tab[0].toUpperCase()}${tab.slice(1)}Reset`).disabled = !dirty;
+    $(`${tab}DirtyHint`).textContent = dirty ? "Есть несохранённые изменения" : "Изменений нет";
+    $(`${tab}DirtyHint`).style.color = dirty ? "var(--warn)" : "";
+  }
+}
+
+function resetFrDirty() {
+  state._frSaved = frSnapshot();
+  markFrDirty();
+}
+
+async function saveFr() {
+  const r = await api().save_settings(collectWithoutModel());
+  if (!r.ok) { toast("err", "Не удалось сохранить", r.error || ""); return; }
+  $("settingsPath").textContent = r.path;
+  flashSaved();
+  toast("ok", "Сохранено");
+  resetFrDirty();
+  refreshSetup();
+}
+
+async function resetFr() {
+  await loadSettings();   // перечитывает всё с диска, включая Фильтры/Резюме
+}
+
+$("btnFiltersSave").onclick = saveFr;
+$("btnFiltersReset").onclick = resetFr;
+$("btnResumeSave").onclick = saveFr;
+$("btnResumeReset").onclick = resetFr;
+
 /* ================= мелкие виджеты: переключатели/чекбоксы ================= */
 
 function hasClass(id, cls) { return $(id).classList.contains(cls); }
 function setSwitch(id, on) { $(id).classList.toggle("on", !!on); }
-function wireSwitch(id, onChange) {
+function wireSwitch(id, onChange, { noAutosave = false } = {}) {
   const el = $(id);
   el.tabIndex = 0; el.setAttribute("role", "switch");
-  el.onclick = () => { el.classList.toggle("on"); onChange && onChange(el.classList.contains("on")); scheduleSave(); };
+  el.onclick = () => {
+    el.classList.toggle("on");
+    onChange && onChange(el.classList.contains("on"));
+    // Фильтры/Резюме сохраняются кнопкой — см. markFrDirty().
+    if (noAutosave) markFrDirty(); else scheduleSave();
+  };
   el.onkeydown = e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); el.click(); } };
 }
 
@@ -198,6 +283,61 @@ function wireSwitch(id, onChange) {
 
 function updateSummaryCount() {
   $("summaryCount").textContent = `${$("resumeSummary").value.length} / 2000`;
+}
+
+let letterStylesCache = null;   // [{id, name, desc}] — нейминг живёт в ai_analyzer.py, не здесь
+
+async function loadLetterStyles() {
+  if (letterStylesCache) return letterStylesCache;
+  letterStylesCache = (await api().get_letter_styles()).styles;
+  return letterStylesCache;
+}
+
+let openaiPresetsCache = null;   // [{name, url, note}] — список живёт в llm_providers.py, не здесь
+
+/** Опции селекта «Сервис» рисуем из бэкенда, чтобы список не разъезжался
+ * с llm_providers.OPENAI_PRESETS (там же его использует мастер первого
+ * запуска). HTML оставляет только «Свой адрес» как первую опцию. */
+async function renderOpenaiPresets() {
+  if (!openaiPresetsCache) openaiPresetsCache = (await api().get_openai_presets()).presets;
+  const sel = $("openaiPreset");
+  [...sel.querySelectorAll("option[value]:not([value=''])")].forEach(o => o.remove());
+  for (const p of openaiPresetsCache) {
+    const o = document.createElement("option");
+    o.value = p.url;
+    o.textContent = p.name;
+    o.title = p.note;
+    sel.appendChild(o);
+  }
+}
+
+function activeLetterStyle() {
+  return (state.settings.letters && state.settings.letters.style) || "business";
+}
+
+/** Ровно один стиль активен — не мультивыбор. Визуально те же переключатели,
+ * что и остальные тумблеры на этой вкладке, но по клику включается ТОЛЬКО
+ * выбранный, остальные гасятся — как радиогруппа. */
+async function renderLetterStyles() {
+  const box = $("letterStyles");
+  if (!box) return;
+  const styles = await loadLetterStyles();
+  const active = activeLetterStyle();
+  box.innerHTML = styles.map(s => `
+    <div class="switch-row">
+      <div class="switch${s.id === active ? " on" : ""}" data-style="${s.id}" title="Выбрать стиль «${esc(s.name)}»"><div class="knob"></div></div>
+      <div class="text"><div class="t">${esc(s.name)}</div><div class="d">${esc(s.desc)}</div></div>
+    </div>`).join("");
+  box.querySelectorAll("[data-style]").forEach(el => {
+    el.tabIndex = 0; el.setAttribute("role", "radio");
+    el.onclick = () => {
+      if (el.dataset.style === activeLetterStyle()) return;  // уже выбран
+      state.settings.letters = { style: el.dataset.style };
+      renderLetterStyles();
+      markFrDirty();
+    };
+    el.onkeydown = e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); el.click(); } };
+  });
 }
 
 function renderQueryChips() {
@@ -211,7 +351,7 @@ function renderQueryChips() {
     + `<input id="newQueryInput" class="chip-input" placeholder="Например: QA инженер" style="display:none">`;
   box.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => {
     state._queries.splice(+b.dataset.i, 1);
-    renderQueryChips(); updateQueriesInfo(); scheduleSave();
+    renderQueryChips(); updateQueriesInfo(); markFrDirty();
   });
   const input = $("newQueryInput");
   $("btnAddQuery").onclick = () => {
@@ -223,7 +363,7 @@ function renderQueryChips() {
     const v = input.value.trim();
     if (v && !state._queries.includes(v)) {
       state._queries.push(v);
-      scheduleSave();
+      markFrDirty();
     }
     renderQueryChips(); updateQueriesInfo();
   };
@@ -236,7 +376,7 @@ function renderQueryChips() {
 
 function totalPages() {
   const q = (state._queries || []).length;
-  const r = (state._regions || []).filter(x => x.enabled !== false).length;
+  const r = siteRegionIndices().filter(i => state._regions[i].enabled !== false).length;
   const mp = parseInt($("maxPagesVal").textContent, 10) || 0;
   return q * r * mp;
 }
@@ -245,6 +385,56 @@ function updateQueriesInfo() {
   const n = (state._queries || []).length;
   $("queriesInfo").textContent = `${n} запрос${n === 1 ? "" : n < 5 ? "а" : "ов"} · один круг ≈ ${totalPages()} страниц`;
 }
+
+/* ================= сайт поиска (hh.ru / hh.kz / rabota.by / ...) ================= */
+
+let sitesCache = null;   // {sites, active} — грузится один раз, сбрасывается при смене сайта
+
+async function loadSites() {
+  if (sitesCache) return sitesCache;
+  sitesCache = await api().get_sites();
+  return sitesCache;
+}
+
+function activeSiteId() {
+  return (state.settings && state.settings.site && state.settings.site.active) || "hh.ru";
+}
+
+async function renderSiteSeg() {
+  const seg = $("siteSeg");
+  if (!seg) return;
+  const data = await loadSites();
+  const active = activeSiteId();
+  seg.innerHTML = data.sites.map(s =>
+    `<button data-s="${s.id}" class="${s.id === active ? "active" : ""}">${esc(s.name)}</button>`).join("");
+  seg.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    if (b.classList.contains("active")) return;
+    const r = await api().set_active_site(b.dataset.s);
+    if (!r.ok) { toast("err", "Не удалось сменить сайт", r.error); return; }
+    // Регионы и справочник другой страны — сбрасываем кэш, дальше всё
+    // перечитается из настроек и модалка регионов подтянет свежий список.
+    areasCache = null;
+    sitesCache = null;
+    await loadSettings();
+    refreshSetup();
+  });
+}
+
+/** Показывает кнопку установки, только пока Camoufox (единственный
+ * поддерживаемый браузер) ещё не стоит. Вызывается из refreshSetup() — до
+ * первого ответа setup_status() (state.setup ещё null) строка остаётся
+ * скрытой, это нормально: она появится сама, как только придёт статус. */
+function updateCamoufoxInstallRow() {
+  const row = $("camoufoxInstallRow");
+  if (!row) return;
+  row.style.display = state.setup && !state.setup.browser ? "" : "none";
+}
+
+$("btnInstallCamoufox").onclick = async () => {
+  $("btnInstallCamoufox").disabled = true;
+  $("camoufoxInstallHint").textContent = "Устанавливаю…";
+  await api().install_camoufox();
+};
 
 /* ================= фильтры: степперы, опыт, регионы ================= */
 
@@ -258,7 +448,7 @@ function renderExperience() {
   // кликабельна вся строка, не только квадратик
   $("expList").querySelectorAll(".check-line").forEach(line => line.onclick = () => {
     line.querySelector(".check").classList.toggle("checked");
-    scheduleSave();
+    markFrDirty();
   });
 }
 
@@ -272,7 +462,7 @@ function stepperWire(name, {min, max, step = 1, fmt}) {
     cur = Math.max(min, Math.min(max, cur + (+b.dataset.d) * step));
     valEl.textContent = fmt(cur);
     if (name === "maxPages") { updateMaxPagesHint(); updateQueriesInfo(); }
-    scheduleSave();
+    markFrDirty();
   });
 }
 
@@ -299,12 +489,23 @@ function scheduleOf(params) {
   return m ? m[1] : "";
 }
 
-function enabledCount() {
-  return (state._regions || []).filter(r => r.enabled !== false).length;
+/** Индексы в state._regions, принадлежащие активному сайту. Регионы без
+ * ключа "site" (сохранённые до появления мультидоменности) считаются
+ * hh.ru — так у существующих пользователей ничего не пропадает. */
+function siteRegionIndices() {
+  const site = activeSiteId();
+  return (state._regions || [])
+    .map((r, i) => i)
+    .filter(i => (state._regions[i].site || "hh.ru") === site);
 }
 
-/** Включает/выключает регион. Последний включённый выключить нельзя —
- * агенту нужен хотя бы один, иначе искать негде (см. active_regions в hh_client). */
+function enabledCount() {
+  return siteRegionIndices().filter(i => state._regions[i].enabled !== false).length;
+}
+
+/** Включает/выключает регион. Последний включённый регион ЭТОГО сайта
+ * выключить нельзя — агенту нужен хотя бы один, иначе искать негде
+ * (см. active_regions в settings.py). */
 function toggleRegion(i) {
   const r = state._regions[i];
   const turningOff = r.enabled !== false;
@@ -317,22 +518,28 @@ function toggleRegion(i) {
 function renderRegions() {
   state._regions = state._regions || state.settings.search.regions.map(r => ({ enabled: true, ...r }));
   const box = $("regionCards");
-  const single = state._regions.length <= 1;
-  box.innerHTML = state._regions.map((r, i) => {
-    const sched = scheduleOf(r.params);
-    const on = r.enabled !== false;
-    return `<div class="region-card${on ? "" : " disabled"}">
-      <div class="switch${on ? " on" : ""}" data-toggle="${i}" title="${on ? "Выключить" : "Включить"} регион"><div class="knob"></div></div>
-      <span class="icon">${sched === "remote" ? ICON.globe15 : ICON.pin15}</span>
-      <div class="text"><div class="t">${esc(r.name)}</div>
-        <div class="d">${sched ? `<span class="badge">${SCHEDULE_LABELS[sched] || sched}</span>` : "Любой график"}</div></div>
-      <div class="spacer"></div>
-      <div class="actions">
-        <button data-e="${i}">Изменить</button>
-        ${single ? "" : `<button class="rm" data-r="${i}" title="Убрать регион">${ICON.remove11}</button>`}
-      </div>
-    </div>`;
-  }).join("");
+  const indices = siteRegionIndices();
+  const single = indices.length <= 1;
+  if (!indices.length) {
+    box.innerHTML = `<div class="hint">Для этого сайта пока нет регионов — добавьте хотя бы один.</div>`;
+  } else {
+    box.innerHTML = indices.map(i => {
+      const r = state._regions[i];
+      const sched = scheduleOf(r.params);
+      const on = r.enabled !== false;
+      return `<div class="region-card${on ? "" : " disabled"}">
+        <div class="switch${on ? " on" : ""}" data-toggle="${i}" title="${on ? "Выключить" : "Включить"} регион"><div class="knob"></div></div>
+        <span class="icon">${sched === "remote" ? ICON.globe15 : ICON.pin15}</span>
+        <div class="text"><div class="t">${esc(r.name)}</div>
+          <div class="d">${sched ? `<span class="badge">${SCHEDULE_LABELS[sched] || sched}</span>` : "Любой график"}</div></div>
+        <div class="spacer"></div>
+        <div class="actions">
+          <button data-e="${i}">Изменить</button>
+          ${single ? "" : `<button class="rm" data-r="${i}" title="Убрать регион">${ICON.remove11}</button>`}
+        </div>
+      </div>`;
+    }).join("");
+  }
   box.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => {
     toggleRegion(+el.dataset.toggle);
     renderRegions(); updateRegionsCount(); updateQueriesInfo(); renderWorkRegionChips();
@@ -350,7 +557,8 @@ function renderWorkRegionChips() {
   const box = $("workRegionChips");
   if (!box) return;
   state._regions = state._regions || state.settings.search.regions.map(r => ({ enabled: true, ...r }));
-  box.innerHTML = state._regions.map((r, i) => {
+  box.innerHTML = siteRegionIndices().map(i => {
+    const r = state._regions[i];
     const on = r.enabled !== false;
     return `<button class="region-chip${on ? " on" : ""}" data-wt="${i}" title="${on ? "Выключить" : "Включить"} регион">
       ${scheduleOf(r.params) === "remote" ? ICON.globe15 : ICON.pin15}${esc(r.name)}
@@ -375,16 +583,26 @@ async function loadAreas() {
 }
 
 function openRegionModal(index) {
-  // index === undefined — добавление нового
+  // index === undefined — добавление новых (можно сразу несколько регионов
+  // и несколько графиков — на все их сочетания заведутся отдельные записи).
+  // index задан — редактирование ОДНОЙ существующей записи, там выбор
+  // всегда одиночный: "стать четырьмя записями" при редактировании одной
+  // не должно.
   const editing = index !== undefined ? state._regions[index] : null;
+  const multi = index === undefined;
   state._regionModal = {
-    index,
-    name: editing ? editing.name.replace(/\s*\(.*\)$/, "") : "",
-    areaId: (/area=(\d+)/.exec(editing?.params || "") || [])[1] || "",
-    schedule: scheduleOf(editing?.params),
+    index, multi,
+    areaIds: new Map(),     // id -> name, выбранные регионы
+    schedules: new Set(),   // выбранные графики; пусто = "любой график"
   };
-  $("regionModalTitle").textContent = editing ? "Изменить регион" : "Добавить регион";
-  $("areaSearch").value = state._regionModal.name;
+  if (editing) {
+    const areaId = (/area=(\d+)/.exec(editing.params || "") || [])[1];
+    if (areaId) state._regionModal.areaIds.set(areaId, editing.name.replace(/\s*\(.*\)$/, ""));
+    const sched = scheduleOf(editing.params);
+    if (sched) state._regionModal.schedules.add(sched);
+  }
+  $("regionModalTitle").textContent = editing ? "Изменить регион" : "Добавить регионы";
+  $("areaSearch").value = editing ? editing.name.replace(/\s*\(.*\)$/, "") : "";
   $("areaResults").innerHTML = "";
   $("regionModalBox").classList.add("show");
   renderScheduleChips();
@@ -397,70 +615,137 @@ function openRegionModal(index) {
     if (manual) {
       $("manualName").value = editing ? editing.name : "";
       $("manualParams").value = editing ? editing.params : "";
-    } else if (state._regionModal.name) {
-      filterAreas(state._regionModal.name);
+    } else {
+      // Пусто — не значит "нечего показать": по клику до ввода текста
+      // должен быть виден список верхнеуровневых регионов страны, а не
+      // пустая область без подсказки, что тут вообще можно выбрать.
+      filterAreas($("areaSearch").value);
     }
   });
   setTimeout(() => $("areaSearch").focus(), 60);
 }
 
+/** Регионы верхнего уровня страны — прямые "дети" корневого узла
+ * (Москва, области, республики и т.п.), а не весь плоский список: у
+ * одной только России в справочнике 15000+ записей, показать их все
+ * списком нечитаемо и бессмысленно. Появляются, пока пользователь ещё
+ * ничего не напечатал. */
+function topLevelAreas() {
+  const areas = areasCache?.areas || [];
+  const root = areas.find(a => a.parent === "");
+  if (!root) return areas.slice(0, 60);
+  return areas.filter(a => a.parent === root.name);
+}
+
 function filterAreas(q) {
   const query = (q || "").trim().toLowerCase();
   const box = $("areaResults");
-  if (!query || !areasCache?.areas?.length) { box.innerHTML = ""; return; }
-  const hits = areasCache.areas.filter(a => a.name.toLowerCase().includes(query)).slice(0, 20);
+  if (!areasCache?.areas?.length) { box.innerHTML = ""; return; }
+  const hits = query
+    ? areasCache.areas.filter(a => a.name.toLowerCase().includes(query)).slice(0, 30)
+    : topLevelAreas();
+  const m = state._regionModal;
   box.innerHTML = hits.map(a =>
-    `<div class="area-hit${a.id === state._regionModal.areaId ? " active" : ""}" data-id="${a.id}" data-name="${esc(a.name)}">
+    `<div class="area-hit${m.areaIds.has(a.id) ? " active" : ""}" data-id="${a.id}" data-name="${esc(a.name)}">
       <span>${esc(a.name)}</span>${a.parent ? `<span class="parent">${esc(a.parent)}</span>` : ""}
     </div>`).join("");
   box.querySelectorAll(".area-hit").forEach(el => el.onclick = () => {
-    state._regionModal.areaId = el.dataset.id;
-    state._regionModal.name = el.dataset.name;
-    $("areaSearch").value = el.dataset.name;
-    filterAreas(el.dataset.name);
+    const id = el.dataset.id, name = el.dataset.name;
+    if (m.multi) {
+      if (m.areaIds.has(id)) m.areaIds.delete(id); else m.areaIds.set(id, name);
+    } else {
+      // Одиночный выбор при редактировании: новый клик заменяет прежний.
+      m.areaIds = new Map([[id, name]]);
+      $("areaSearch").value = name;
+    }
+    filterAreas($("areaSearch").value);
     updateRegionPreview();
   });
 }
 
 function renderScheduleChips() {
+  const m = state._regionModal;
   const scheds = areasCache?.schedules ||
     Object.entries(SCHEDULE_LABELS).map(([id, name]) => ({ id, name }));
-  $("scheduleChips").innerHTML = scheds.map(s =>
-    `<button class="sched-chip${s.id === state._regionModal.schedule ? " active" : ""}" data-id="${s.id}">${esc(s.name)}</button>`).join("");
+  $("scheduleChips").innerHTML = scheds.map(s => {
+    const active = s.id === "" ? m.schedules.size === 0 : m.schedules.has(s.id);
+    return `<button class="sched-chip${active ? " active" : ""}" data-id="${s.id}">${esc(s.name)}</button>`;
+  }).join("");
   $("scheduleChips").querySelectorAll("button").forEach(b => b.onclick = () => {
-    state._regionModal.schedule = b.dataset.id;
+    const id = b.dataset.id;
+    if (!m.multi) {
+      m.schedules = id ? new Set([id]) : new Set();
+    } else if (id === "") {
+      m.schedules = new Set();   // "Любой график" несовместим с конкретными — сбрасывает их
+    } else {
+      m.schedules.delete("");
+      if (m.schedules.has(id)) m.schedules.delete(id); else m.schedules.add(id);
+    }
     renderScheduleChips();
     updateRegionPreview();
   });
 }
 
-function regionModalResult() {
+/** Все сочетания выбранных регионов × выбранных графиков — каждое станет
+ * своей записью в «Где искать» (агент ходит по ним отдельными проходами,
+ * см. active_regions в settings.py). Пустой набор графиков — "любой". */
+function regionModalResults() {
   const m = state._regionModal;
-  // При редактировании сохраняем текущее enabled; у нового региона — включён сразу.
   const enabled = m.index !== undefined ? state._regions[m.index].enabled !== false : true;
+  const site = m.index !== undefined ? (state._regions[m.index].site || "hh.ru") : activeSiteId();
   const manual = $("areaManual").style.display !== "none";
   if (manual) {
     const name = $("manualName").value.trim();
     const params = $("manualParams").value.trim();
-    return name && params ? { name, params, enabled } : null;
+    return name && params ? [{ name, params, enabled, site }] : [];
   }
-  if (!m.areaId) return null;
-  const schedTag = m.schedule ? ` (${SCHEDULE_LABELS[m.schedule] || m.schedule})` : "";
-  return {
-    name: m.name + schedTag,
-    params: `&area=${m.areaId}` + (m.schedule ? `&schedule=${m.schedule}` : ""),
-    enabled,
-  };
+  if (!m.areaIds.size) return [];
+  const schedIds = m.schedules.size ? [...m.schedules] : [""];
+  const out = [];
+  for (const [areaId, areaName] of m.areaIds) {
+    for (const sid of schedIds) {
+      const schedTag = sid ? ` (${SCHEDULE_LABELS[sid] || sid})` : "";
+      out.push({
+        name: areaName + schedTag,
+        params: `&area=${areaId}` + (sid ? `&schedule=${sid}` : ""),
+        enabled, site,
+      });
+    }
+  }
+  return out;
 }
 
 function updateRegionPreview() {
-  const r = regionModalResult();
-  $("regionPreview").textContent = r ? r.params : "выберите регион из списка";
-  $("regionModalSave").disabled = !r;
+  const m = state._regionModal;
+  const box = $("regionPreview");
+  const manual = $("areaManual").style.display !== "none";
+  if (manual) {
+    box.innerHTML = "";
+    $("regionModalSave").disabled = !regionModalResults().length;
+    return;
+  }
+  if (!m.areaIds.size) {
+    box.innerHTML = `<span class="hint">выберите хотя бы один регион</span>`;
+    $("regionModalSave").disabled = true;
+    return;
+  }
+  // Чипы показывают ВЫБРАННЫЕ РЕГИОНЫ (не все сочетания с графиками —
+  // при нескольких графиках их было бы неразборчиво много).
+  box.innerHTML = [...m.areaIds.entries()].map(([id, name]) =>
+    `<div class="chip">${esc(name)}<button data-rm="${id}" title="Убрать регион">${ICON.remove11}</button></div>`).join("");
+  box.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => {
+    m.areaIds.delete(b.dataset.rm);
+    filterAreas($("areaSearch").value);
+    updateRegionPreview();
+  });
+  $("regionModalSave").disabled = false;
 }
 
 $("areaSearch").addEventListener("input", () => {
-  state._regionModal.areaId = "";  // текст меняли — прежний выбор недействителен
+  // При редактировании новый текст поиска обнуляет прежний одиночный выбор
+  // (ищем замену). При добавлении — нет: поиск не должен сбрасывать уже
+  // отмеченные регионы.
+  if (!state._regionModal.multi) state._regionModal.areaIds = new Map();
   filterAreas($("areaSearch").value);
   updateRegionPreview();
 });
@@ -468,11 +753,24 @@ $("areaSearch").addEventListener("input", () => {
   $(id).addEventListener("input", updateRegionPreview));
 
 $("regionModalSave").onclick = () => {
-  const r = regionModalResult();
-  if (!r) return;
+  const results = regionModalResults();
+  if (!results.length) return;
   const i = state._regionModal.index;
-  if (i !== undefined) state._regions[i] = r;
-  else state._regions.push(r);
+  if (i !== undefined) {
+    state._regions[i] = results[0];
+  } else {
+    // Дедуп по params в пределах текущего сайта — повторное сохранение той
+    // же выборки (или пересечение с уже добавленным регионом) не плодит
+    // дублей.
+    const seen = new Set(state._regions
+      .filter(r => (r.site || "hh.ru") === activeSiteId())
+      .map(r => r.params));
+    for (const r of results) {
+      if (seen.has(r.params)) continue;
+      state._regions.push(r);
+      seen.add(r.params);
+    }
+  }
   $("regionModalBox").classList.remove("show");
   renderRegions(); updateRegionsCount(); updateQueriesInfo(); renderWorkRegionChips(); scheduleSave();
 };
@@ -480,7 +778,7 @@ $("regionModalCancel").onclick = () => $("regionModalBox").classList.remove("sho
 $("btnAddRegion").onclick = () => openRegionModal(undefined);
 
 function updateRegionsCount() {
-  const n = state._regions.length;
+  const n = siteRegionIndices().length;
   $("regionsCount").textContent = `${n} регион${n === 1 ? "" : n < 5 ? "а" : "ов"}`;
 }
 
@@ -608,12 +906,29 @@ $("btnRefresh").onclick = () => refreshModels();
 
 /* ---------- выбор модели у облачных провайдеров ---------- */
 
+// Подпись «сохранён» и hasKey() ниже раньше смотрели на _secrets,
+// привязанный к адресу, с которым открывалась вкладка — после переключения
+// сервиса (Groq → Gemini) подпись врала, что ключ уже есть, и молча
+// разблокировала «Загрузить список моделей» на чужом ключе. Спрашиваем
+// подсказку ЗАНОВО для нового адреса, до сохранения.
+async function refreshOpenaiKeyHint() {
+  const url = $("openaiUrl").value.trim();
+  if (!url) return;
+  const { hint } = await api().get_openai_key_hint(url);
+  state.settings._secret_hints = state.settings._secret_hints || {};
+  state.settings._secret_hints.openai_api_key = hint;
+  state.settings._secrets.openai_api_key = !!hint;
+  renderSecretHints(state.settings);
+  syncOpenaiPicker();
+}
+
 // OpenAI-совместимые сервисы: пресет заполняет базовый адрес
 $("openaiPreset").onchange = () => {
   const url = $("openaiPreset").value;
   if (url) { $("openaiUrl").value = url; }
   markModelDirty();
   syncOpenaiPicker();
+  refreshOpenaiKeyHint();
 };
 
 let openaiModels = [];   // полный список с последней загрузки
@@ -732,7 +1047,11 @@ $("openaiKey").addEventListener("input", () => {
   clearTimeout(state._keyTimer);
   state._keyTimer = setTimeout(() => loadOpenaiModels({ quiet: true }), 700);
 });
-$("openaiUrl").addEventListener("input", syncOpenaiPicker);
+$("openaiUrl").addEventListener("input", () => {
+  syncOpenaiPicker();
+  clearTimeout(state._urlHintTimer);
+  state._urlHintTimer = setTimeout(refreshOpenaiKeyHint, 400);
+});
 $("openaiModel").addEventListener("input", () => { syncOpenaiPicker(); });
 
 // Anthropic: список известных моделей + возможность ввести своё имя
@@ -771,8 +1090,9 @@ function renderEvents() {
 wireSwitch("desktopSwitch");
 wireSwitch("telegramSwitch", on => { $("tgFields").style.display = on ? "" : "none"; });
 wireSwitch("keychainSwitch");
-wireSwitch("titleOnlySwitch", () => updateQueriesInfo());
-wireSwitch("requireLetterSwitch");
+wireSwitch("titleOnlySwitch", () => updateQueriesInfo(), { noAutosave: true });
+wireSwitch("requireLetterSwitch", null, { noAutosave: true });
+wireSwitch("letterReviewSwitch", null, { noAutosave: true });
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».
 // Функция была написана, но не вызвана — кнопки +/− не работали вовсе.
@@ -789,11 +1109,28 @@ document.querySelectorAll("input, textarea, select").forEach(el => {
   if (el.closest("#tab-model")) return;
   // Чат не относится к настройкам вообще — у него свой обработчик отправки.
   if (el.closest("#tab-chat")) return;
+  // Фильтры/Резюме — тоже кнопкой, см. markFrDirty() ниже.
+  if (el.closest("#tab-filters") || el.closest("#tab-resume")) return;
   el.addEventListener("change", scheduleSave);
+  // #tgToken — исключение: на каждое нажатие клавиши scheduleSave() слал бы
+  // ещё недописанный токен в collectWithoutModel() (которая специально НЕ
+  // вырезает tg_bot_token — это единственный путь его сохранения), и после
+  // закрытия окна на полуслове secrets.json оставался с обрезанным токеном.
+  // change (уход фокуса/Enter) сохраняет только целиком введённое значение.
+  if (el.id === "tgToken") return;
   if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
     el.addEventListener("input", scheduleSave);
 });
 $("resumeSummary").addEventListener("input", updateSummaryCount);
+
+// Резюме (название, профиль) и Фильтры (причины отклонить) — те же поля
+// ввода, но здесь правки только помечают вкладку как несохранённую.
+document.querySelectorAll("#tab-resume input, #tab-resume textarea, "
+  + "#tab-filters input, #tab-filters textarea").forEach(el => {
+  el.addEventListener("change", markFrDirty);
+  if (el.tagName === "TEXTAREA" || ["text", "password", "number"].includes(el.type))
+    el.addEventListener("input", markFrDirty);
+});
 
 // Смена модели в селекте обновляет и список моделей, и сайдбар
 $("ollamaModel").addEventListener("change", () => useModel($("ollamaModel").value));
@@ -805,6 +1142,7 @@ $("btnTestNotify").onclick = async () => {
   $("notifyStatus").innerHTML = `<span class="pill ${r.ok ? "pill-ok" : ""}" style="${r.ok ? "" : "color:var(--err)"}">${esc(r.message)}</span>`;
 };
 $("btnOpenFolder").onclick = () => api().open_settings_folder();
+$("btnOpenLogsFolder").onclick = () => api().open_logs_folder();
 
 /* ================= вкладка «Чат» ================= */
 
@@ -935,18 +1273,35 @@ $("btnChatReset").onclick = async () => {
 /* ================= всплывашка о результате ================= */
 
 let toastTimer = null;
-function toast(kind, title, text = "") {
+function toast(kind, title, text = "", action = null) {
   // kind: "ok" | "err" | "wait". Ожидание не гасим по таймеру — его сменит итог.
+  // action: {label, onClick} — необязательная кнопка в тосте (например,
+  // «Я вошёл — сохранить сейчас» на ожидании входа в hh).
   const el = $("toast");
   el.className = "toast show " + kind;
   $("toastTitle").textContent = title;
   $("toastText").textContent = text;
   $("toastText").style.display = text ? "" : "none";
+  const actionBtn = $("toastAction");
+  if (action) {
+    actionBtn.textContent = action.label;
+    actionBtn.style.display = "";
+    actionBtn.disabled = false;
+    actionBtn.onclick = action.onClick;
+  } else {
+    actionBtn.style.display = "none";
+    actionBtn.onclick = null;
+  }
   clearTimeout(toastTimer);
   // Успех читается за секунду, ошибку нужно успеть прочитать и скопировать.
   if (kind === "ok") toastTimer = setTimeout(hideToast, 4000);
 }
-function hideToast() { clearTimeout(toastTimer); $("toast").classList.remove("show"); }
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("toast").classList.remove("show");
+  $("toastAction").style.display = "none";
+  $("toastAction").onclick = null;
+}
 
 
 /* ================= вкладка «Модель»: явное сохранение ================= */
@@ -989,8 +1344,7 @@ $("btnModelSave").onclick = async () => {
   // Ключ ушёл в хранилище — поле очищаем, дальше оно значит «не менять».
   $("openaiKey").value = ""; $("anthropicKey").value = "";
   state.settings = await api().get_settings();
-  $("openaiKey").placeholder = state.settings._secrets.openai_api_key
-    ? "сохранён — оставьте пустым" : "оставьте пустым — не изменится";
+  renderSecretHints(state.settings);
   resetModelDirty();
   updateSidebarFooter();
   flashSaved();
@@ -1027,11 +1381,12 @@ function setupRows(s) {
   const modelRow = (s && s.provider && s.provider !== "ollama")
     ? ["model_ready", "Облачная модель", "укажите ключ и модель на вкладке «Модель»"]
     : ["model_ready", "Ollama запущена", null];
+  const site = (s && s.site) || "hh.ru";
   return [
-    ["browser", "Браузер для Playwright", "установлен"],
+    ["browser", "Браузер (Camoufox)", "установлен"],
     modelRow,
-    ["logged_in", "Вход в аккаунт hh.ru", "откроется окно браузера, код придёт как обычно"],
-    ["resume", "Название резюме", "должно совпадать с заголовком на hh.ru"],
+    ["logged_in", `Вход в аккаунт ${site}`, "откроется окно браузера, код придёт как обычно"],
+    ["resume", "Название резюме", `должно совпадать с заголовком на ${site}`],
     ["summary", "Профиль для писем", "модель пишет письма строго по этому тексту"],
   ];
 }
@@ -1040,6 +1395,7 @@ async function refreshSetup() {
   const s = await api().setup_status();
   if (s.error) return;
   state.setup = s;
+  updateCamoufoxInstallRow();
   const rows = setupRows(s);
   const okCount = rows.filter(([k]) => s[k]).length;
   $("readyBadge").textContent = `${okCount} из ${rows.length}`;
@@ -1168,10 +1524,10 @@ function classifyLog(text, level) {
   return { icon: "logViewing", cls: "" };
 }
 
-function addLog(text, level = "info") {
+function addLog(text, level = "info", origin = "") {
   const time = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   const important = IMPORTANT_RE.test(text) || level !== "info";
-  state.logs.push({ time, level, text, important });
+  state.logs.push({ time, level, text, important, origin });
   if (state.logs.length > 4000) state.logs.shift();
   renderLogAppend(state.logs[state.logs.length - 1]);
   updateNowFromLog(text);
@@ -1197,10 +1553,16 @@ function renderLogAppend(entry) {
   // «12:07 \n сообщение». Висячий отступ для переносов даёт CSS (text-indent).
   const iconCls = entry.level === "error" ? "err"
     : entry.level === "warn" ? "warn" : cls === "important" ? "ok" : "dim";
+  // origin — только у error/warn: у info он был бы почти на каждой из
+  // 173 существующих print(), а полезен именно там, где надо локализовать
+  // сбой. В обычную "line" его не подмешиваем НИКОГДА — LOG_PATTERNS и
+  // updateNowFromLog разбирают текст регулярками с якорем ^.
+  const originHtml = (entry.level === "error" || entry.level === "warn") && entry.origin
+    ? `<span class="log-origin">${esc(entry.origin)}</span> ` : "";
   // Пробел перед текстом нужен именно в разметке: иначе при копировании
   // время слипается с сообщением («12:09Готов к работе»).
   div.innerHTML = `<div class="text"><span class="time">${entry.time}</span>` +
-    `<span class="icon ${iconCls}">${ICON[icon]}</span> ${esc(entry.text)}</div>`;
+    `<span class="icon ${iconCls}">${ICON[icon]}</span> ${originHtml}${esc(entry.text)}</div>`;
   box.appendChild(div);
   while (box.children.length > 800) box.removeChild(box.firstChild);
   if (atBottom) box.scrollTop = box.scrollHeight;
@@ -1208,11 +1570,19 @@ function renderLogAppend(entry) {
   $("logCount").textContent = state.logs.length ? `${state.logs.length} строк${state.logs.length === 1 ? "а" : ""} за сеанс` : "";
 }
 
+// Фильтрует по признакам, записанным на сам DOM-узел (dataset.important/
+// dataset.level в renderLogAppend), а не по индексу в state.logs: DOM
+// обрезается на 800 узлах, а state.logs — на 4000, после первого обрезания
+// индексы расходятся и фильтр начинает прятать не те строки.
+function passesFilterEl(el) {
+  if (state.filter === "error") return el.dataset.level === "error";
+  if (state.filter === "important") return el.dataset.important === "1";
+  return true;
+}
+
 function reflowLogFilter() {
-  $("log").querySelectorAll(".log-line").forEach((el, i) => {
-    const entry = state.logs[i];
-    if (!entry) return;
-    el.classList.toggle("hidden-by-filter", !passesFilter(entry));
+  $("log").querySelectorAll(".log-line").forEach(el => {
+    el.classList.toggle("hidden-by-filter", !passesFilterEl(el));
   });
   updateLogFooter();
 }
@@ -1232,14 +1602,22 @@ $("logFilter").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   state.filter = b.dataset.f;
   $("logFilter").querySelectorAll("button").forEach(x => x.classList.remove("active", "err-tab"));
-  b.classList.add("active", state.filter === "error" ? "err-tab" : "");
+  // classList.add() бросает SyntaxError на пустой строке-токене — с
+  // условным вторым аргументом ("" для не-error) это обрывало обработчик
+  // ДО reflowLogFilter(): переключение на «Всё»/«Важное» не подсвечивало
+  // кнопку и не снимало старый фильтр со строк.
+  b.classList.add("active");
+  if (state.filter === "error") b.classList.add("err-tab");
   reflowLogFilter();
 });
 $("logShowAll").onclick = () => { state.filter = "all"; $("logFilter").querySelectorAll("button").forEach(x => x.classList.toggle("active", x.dataset.f === "all")); reflowLogFilter(); };
 
 $("btnCopyLog").onclick = async () => {
-  // Копируем то, что сейчас показано фильтром — с временем, как в журнале
-  const lines = state.logs.filter(passesFilter).map(e => `${e.time}  ${e.text}`);
+  // Копируем то, что сейчас показано фильтром — с временем, как в журнале.
+  // Origin дописываем только для не-info строк — ради баг-репортов, не
+  // ради дублирования сотен обычных строк текстом, который уже есть.
+  const lines = state.logs.filter(passesFilter).map(e =>
+    e.level !== "info" && e.origin ? `${e.time}  [${e.origin}] ${e.text}` : `${e.time}  ${e.text}`);
   if (!lines.length) return;
   const btn = $("btnCopyLog");
   const r = await api().copy_to_clipboard(lines.join("\n"));
@@ -1350,7 +1728,23 @@ function setRunningUi(running, startedAt) {
   updateWorkLayout();
 }
 
-$("btnStart").onclick = async () => {
+// Вынесено из-под кнопки — вызывается и напрямую с «Запустить», и из мастера
+// первого запуска (последний шаг «Начать работу»), чтобы не дублировать
+// проверку готовности и обработку ошибок в двух местах.
+async function startAgent() {
+  // Без названия резюме и профиля агент ищет вслепую (по дефолтным
+  // запросам вроде "Тестировщик"/"QA") и пишет письма из пустого профиля.
+  // CLI (main.py) это блокирует через ensure_configured(), в интерфейсе
+  // такой проверки не было вовсе — можно было случайно запустить агента
+  // до заполнения «Резюме и поиск» и не заметить. refreshSetup() —
+  // не доверяем возможно устаревшему кэшу state.setup.
+  await refreshSetup();
+  if (!state.setup || !state.setup.resume || !state.setup.summary) {
+    toast("err", "Сначала заполните резюме",
+      "Название резюме и профиль для писем — на вкладке «Резюме и поиск». Без них агент ищет вслепую.");
+    document.querySelector('.nav-item[data-tab="resume"]').click();
+    return;
+  }
   try {
     $("errorBanner").style.display = "none";
     await api().save_settings(collectWithoutModel());
@@ -1359,7 +1753,8 @@ $("btnStart").onclick = async () => {
   } catch (e) {
     showErrorBanner("Ошибка при запуске", e && e.message ? e.message : String(e));
   }
-};
+}
+$("btnStart").onclick = startAgent;
 $("btnStop").onclick = () => {
   // Блокируем сразу: раньше при отсутствии мгновенной реакции пользователь
   // жал несколько раз, и лог засорялся повторными «Останавливаюсь…».
@@ -1416,7 +1811,7 @@ function setPauseCountdown(seconds) {
 /* ================= события от Python ================= */
 
 window.onAgentEvent = (event, data) => {
-  if (event === "log") addLog(data.line, data.level);
+  if (event === "log") addLog(data.line, data.level, data.origin || "");
   else if (event === "state") setRunningUi(data.running, data.started_at);
   else if (event === "stats") { state.stats = data; updateWorkLayout(); }
   else if (event === "pause") setPauseCountdown(data && data.seconds);
@@ -1429,7 +1824,81 @@ window.onAgentEvent = (event, data) => {
     setTimeout(() => $("captchaInput").focus(), 60);
   }
   else if (event === "captcha_close") $("captchaBox").classList.remove("show");
-  else if (event === "setup_done") refreshSetup();
+  else if (event === "setup_done") {
+    // Кнопка установки Camoufox сама спрячется через updateCamoufoxInstallRow(),
+    // если ставилось успешно; при неудаче строка остаётся видимой — тогда
+    // кнопку нужно разблокировать явно, иначе "Устанавливаю…" зависнет навсегда.
+    if (data && !data.ok) {
+      $("btnInstallCamoufox").disabled = false;
+      $("camoufoxInstallHint").textContent = "Не установлен — " + (data.message || "ошибка");
+    }
+    refreshSetup();
+  }
+  else if (event === "await_login") {
+    // В мастере первого запуска (шаг «Вход») то же ожидание рендерится
+    // прямо в шаге, а не тостом — тост здесь появился бы поверх и рядом с
+    // уже видимой на экране кнопкой-подстраховкой, вышло бы дублирование.
+    if ($("onboardingBox").classList.contains("show")) {
+      if (data && data.site) {
+        $("onboardLoginIdle").style.display = "none";
+        $("onboardLoginError").style.display = "none";
+        $("onboardLoginWait").style.display = "";
+        $("onboardLoginWait").querySelector(".hint").textContent =
+          `Ждём вход в аккаунт ${data.site} в открывшемся окне — как только он будет виден на странице, продолжим сами.`;
+      }
+      return;
+    }
+    if (data && data.site) {
+      // Персистентный тост ("wait" не гасится сам) с кнопкой-подстраховкой:
+      // авто-детект входа обычно справляется сам, но если разметку hh
+      // поменяют и он не сработает, ждать 10 минут молча незачем.
+      toast("wait", `Войдите в аккаунт ${data.site}`,
+        "Как только вход будет виден на странице — сохраним сами. Если не сработает через минуту-две, нажмите кнопку.",
+        { label: "Я вошёл — сохранить сейчас", onClick: async () => {
+            $("toastAction").disabled = true;
+            await api().confirm_login();
+          } });
+    } else {
+      hideToast();
+    }
+  }
+  else if (event === "wizard_login_done") {
+    onboardLoginBusy = false;
+    $("onboardLoginWait").style.display = "none";
+    if (data && data.ok) {
+      $("onboardLoginIdle").style.display = "";
+      $("onboardLoginError").style.display = "none";
+      showOnboardStep(2);
+    } else {
+      $("onboardLoginIdle").style.display = "";
+      $("onboardLoginError").style.display = "";
+      $("onboardLoginError").textContent = (data && data.error) || "Не удалось войти в аккаунт.";
+    }
+  }
+  else if (event === "wizard_resumes_done") {
+    $("onboardResumesLoading").style.display = "none";
+    if (data && data.ok && data.resumes && data.resumes.length) {
+      $("onboardResumesList").style.display = "";
+      $("onboardResumesError").style.display = "none";
+      renderOnboardResumes(data.resumes);
+    } else {
+      $("onboardResumesError").style.display = "";
+      $("onboardResumesError").textContent = (data && data.error) || "Не удалось найти резюме автоматически.";
+    }
+  }
+  else if (event === "wizard_profile_done") {
+    $("onboardProfileLoading").style.display = "none";
+    $("onboardProfileForm").style.display = "";
+    if (data && data.ok) {
+      $("onboardProfileErrorBox").style.display = "none";
+      $("onboardResumeSummary").value = data.summary || "";
+    } else {
+      $("onboardProfileErrorBox").style.display = "";
+      $("onboardProfileError").textContent = (data && data.error) || "Не удалось собрать профиль автоматически — впишите сами.";
+    }
+    updateOnboardSummaryCount();
+    onboardValidateStep3();
+  }
   else if (event === "pull_progress") {
     $("pullBox").style.display = "flex";
     $("pullTitle").textContent = data.status || "Скачиваю…";
@@ -1453,6 +1922,134 @@ window.onAgentEvent = (event, data) => {
   }
 };
 
+/* ================= мастер первого запуска ================= */
+// Полноэкранный гейт: пока вход + резюме + профиль не готовы, обычный
+// интерфейс не показывается вовсе. Три шага — Вход / Резюме / Профиль —
+// используют мосты wizard_login/wizard_list_resumes/wizard_condense_resume
+// (ui_app.py) и события await_login (переиспользован из обычного флоу
+// «Запустить», см. onAgentEvent выше) / wizard_login_done /
+// wizard_resumes_done / wizard_profile_done.
+
+const onboardState = { chosenResume: null };
+
+function needsOnboarding() {
+  return !state.setup || !state.setup.logged_in || !state.setup.resume || !state.setup.summary;
+}
+
+function onboardStartStep() {
+  if (!state.setup.logged_in) return 1;
+  if (!state.setup.resume || !state.setup.summary) return 2;
+  return 3;
+}
+
+function showOnboardStep(n) {
+  [1, 2, 3].forEach(i => $("onboardStep" + i).style.display = i === n ? "" : "none");
+  document.querySelectorAll(".onboard-dot").forEach(d => {
+    const s = +d.dataset.step;
+    d.classList.toggle("active", s === n);
+    d.classList.toggle("done", s < n);
+  });
+  if (n === 2) enterOnboardStep2();
+}
+
+function openOnboarding() {
+  $("onboardingBox").classList.add("show");
+  showOnboardStep(onboardStartStep());
+}
+
+function enterOnboardStep2() {
+  $("onboardResumesLoading").style.display = "";
+  $("onboardResumesList").style.display = "none";
+  $("onboardResumesError").style.display = "none";
+  $("onboardManualResume").style.display = "none";
+  $("onboardStep2Actions").style.display = "";
+  api().wizard_list_resumes();
+}
+
+function renderOnboardResumes(resumes) {
+  const box = $("onboardResumesList");
+  box.innerHTML = resumes.map((r, i) =>
+    `<div class="area-hit" data-i="${i}"><span>${esc(r.title)}</span></div>`).join("");
+  box.querySelectorAll("[data-i]").forEach(el => el.onclick = () => onboardPickResume(resumes[+el.dataset.i]));
+}
+
+function onboardPickResume(r) {
+  onboardState.chosenResume = r;
+  showOnboardStep(3);
+  $("onboardResumeName").value = r.title;
+  $("onboardProfileForm").style.display = "none";
+  $("onboardProfileErrorBox").style.display = "none";
+  $("onboardProfileLoading").style.display = "";
+  $("btnOnboardFinish").disabled = true;
+  api().wizard_condense_resume(r.url);
+}
+
+function updateOnboardSummaryCount() {
+  $("onboardSummaryCount").textContent = `${$("onboardResumeSummary").value.length} / 3000`;
+}
+
+function onboardValidateStep3() {
+  const ok = $("onboardResumeName").value.trim() && $("onboardResumeSummary").value.trim();
+  $("btnOnboardFinish").disabled = !ok;
+}
+
+async function finishOnboarding(name, summary) {
+  await api().save_settings({ resume: { target_name: name, summary } });
+  $("onboardingBox").classList.remove("show");
+  // loadSettings(), а не только refreshSetup(): иначе поля на вкладке
+  // «Резюме и поиск» остались бы пустыми в живом DOM, и следующий
+  // collectWithoutModel() внутри startAgent() отправил бы их назад
+  // пустыми, затерев то, что только что сохранил мастер.
+  await loadSettings();
+  await startAgent();
+}
+
+// Отдельный флаг, а не только скрытие кнопки через display:none: без него
+// повторный клик (например, если onboardLoginIdle почему-то снова стала
+// видимой, пока предыдущий вход ещё не завершился) открывал ВТОРОЙ браузер
+// поверх первого — оба висели и ждали, окна множились. Бэкенд теперь тоже
+// это отклоняет (AgentBridge._wizard_login_busy), но проверка на клике —
+// более быстрая обратная связь.
+let onboardLoginBusy = false;
+$("btnOnboardLogin").onclick = () => {
+  if (onboardLoginBusy) return;
+  onboardLoginBusy = true;
+  $("onboardLoginIdle").style.display = "none";
+  $("onboardLoginError").style.display = "none";
+  $("onboardLoginWait").style.display = "";
+  $("onboardLoginWait").querySelector(".hint").textContent = "Открываю браузер…";
+  api().wizard_login();
+};
+$("btnOnboardConfirmLogin").onclick = async () => {
+  $("btnOnboardConfirmLogin").disabled = true;
+  await api().confirm_login();
+};
+$("btnOnboardManualResume").onclick = () => {
+  $("onboardResumesLoading").style.display = "none";
+  $("onboardResumesList").style.display = "none";
+  $("onboardResumesError").style.display = "none";
+  $("onboardStep2Actions").style.display = "none";
+  $("onboardManualResume").style.display = "";
+};
+$("btnOnboardManualFinish").onclick = async () => {
+  const name = $("onboardManualName").value.trim();
+  const summary = $("onboardManualSummary").value.trim();
+  if (!name || !summary) return;
+  await finishOnboarding(name, summary);
+};
+$("btnOnboardRetryProfile").onclick = () => {
+  if (!onboardState.chosenResume) return;
+  $("onboardProfileErrorBox").style.display = "none";
+  $("onboardProfileForm").style.display = "none";
+  $("onboardProfileLoading").style.display = "";
+  api().wizard_condense_resume(onboardState.chosenResume.url);
+};
+$("btnOnboardFinish").onclick = async () => {
+  await finishOnboarding($("onboardResumeName").value.trim(), $("onboardResumeSummary").value.trim());
+};
+$("onboardResumeName").addEventListener("input", onboardValidateStep3);
+$("onboardResumeSummary").addEventListener("input", () => { updateOnboardSummaryCount(); onboardValidateStep3(); });
+
 /* ================= стартовая инициализация ================= */
 
 window.addEventListener("pywebviewready", async () => {
@@ -1462,6 +2059,7 @@ window.addEventListener("pywebviewready", async () => {
   await refreshSetup();
   setRunningUi(st.running, st.started_at ? st.started_at : null);
   addLog("Готов к работе.");
+  if (needsOnboarding()) openOnboarding();
 });
 
 $("toastClose").onclick = hideToast;

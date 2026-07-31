@@ -13,9 +13,15 @@ import aiohttp
 from settings import data_dir
 
 AREAS_URL = "https://api.hh.ru/areas"
-# Требование API: заголовок вида "имя-приложения/версия (контакт)"
-HH_USER_AGENT = "HHAgent/0.1 (dmitrobuber@gmail.com)"
-CACHE_FILE = "hh_areas.json"
+# Требование API: заголовок вида "имя-приложения/версия (контакт)".
+# Контакт — репозиторий проекта, а не личная почта разработчика: этот
+# заголовок уходит с каждым запросом каждого пользователя приложения.
+HH_USER_AGENT = "HHAgent/0.1 (+https://github.com/fikstt2/hh-ai-agent)"
+# v2: старый кэш хранил записи без поля "root" (страна узла), появившегося
+# вместе с country_subtree() для мультидоменности. Смена имени файла — самый
+# простой способ заставить существующих пользователей переполучить дерево
+# в новом формате, не трогая CACHE_TTL и не изобретая миграцию на месте.
+CACHE_FILE = "hh_areas_v2.json"
 CACHE_TTL = 30 * 24 * 3600  # регионы меняются редко
 
 # График работы — из /dictionaries. Захардкожен осознанно: этот словарь
@@ -54,19 +60,40 @@ def _write_cache(areas):
         pass  # кэш — оптимизация, не обязанность
 
 
-def _flatten(nodes, parent_name="", out=None):
-    """Дерево регионов → плоский список для поиска по подстроке."""
+def _flatten(nodes, parent_name="", root_name=None, out=None):
+    """Дерево регионов → плоский список для поиска по подстроке.
+
+    root_name — имя корневого узла (страны) для каждой записи, чтобы потом
+    можно было сузить список одной страной (country_subtree) без похода
+    обратно в дерево, которое после flatten уже потеряно."""
     if out is None:
         out = []
     for node in nodes:
+        this_root = root_name if root_name is not None else node["name"]
         out.append({
             "id": node["id"],
             "name": node["name"],
             "parent": parent_name,
+            "root": this_root,
         })
         if node.get("areas"):
-            _flatten(node["areas"], node["name"], out)
+            _flatten(node["areas"], node["name"], this_root, out)
     return out
+
+
+def country_subtree(areas: list, area_id: str | None) -> list:
+    """Сужает список регионов до одной страны — по id её корневого узла
+    (см. sites.py, поле "area").
+
+    Кэш, сохранённый до появления мультидоменности, не содержит "root" —
+    в этом случае возвращаем список как есть: лучше показать все страны,
+    чем внезапно пустой справочник у существующего пользователя."""
+    if not area_id or not areas or "root" not in areas[0]:
+        return areas
+    root_name = next((a["name"] for a in areas if a["id"] == area_id), None)
+    if root_name is None:
+        return areas
+    return [a for a in areas if a["root"] == root_name]
 
 
 async def fetch_areas() -> tuple[list, str]:

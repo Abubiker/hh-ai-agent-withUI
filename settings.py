@@ -36,6 +36,12 @@ DEFAULT_EXCLUSIONS = """\
 # Дефолты намеренно обезличены: это то, что увидит новый пользователь.
 # Личные данные подтягиваются миграцией из config.py при первом запуске.
 DEFAULTS = {
+    "site": {
+        # Активная площадка HH Group (id из sites.SITES). У каждой свой
+        # логин и свой файл сессии — см. sites.py. Регионы ниже фильтруются
+        # по этому же id.
+        "active": "hh.ru",
+    },
     "search": {
         "queries": ["Тестировщик", "QA"],
         # Искать слова запроса только в названии вакансии. Если искать ещё и
@@ -69,6 +75,18 @@ DEFAULTS = {
         # иначе агент не найдёт его в момент отклика.
         "target_name": "",
         "summary": "",
+    },
+    "letters": {
+        # Стиль сопроводительного письма — ровно один, см. ai_analyzer.
+        # LETTER_STYLES. "business" — тон сегодняшнего (единственного до
+        # появления стилей) промпта, так что у существующих пользователей
+        # после обновления письма не меняются.
+        "style": "business",
+        # Второй проход модели перед отправкой (roadmap, этап 6): проверяет
+        # письмо на повторы/воду/соответствие вакансии и при необходимости
+        # переписывает. Стоит лишний вызов модели на письмо — по умолчанию
+        # включено, качество важнее пары секунд.
+        "review_enabled": True,
     },
     "llm": {
         # ollama | openai_compat | anthropic
@@ -372,10 +390,19 @@ class Settings:
         return self.data["search"]["regions"]
 
     @property
+    def active_site_id(self) -> str:
+        return self.data.get("site", {}).get("active", "hh.ru")
+
+    @property
     def active_regions(self) -> list[dict]:
-        """Только включённые — то, по чему агент реально ходит в этом сеансе.
-        Старые записи без ключа "enabled" (до этой настройки) считаются включёнными."""
-        return [r for r in self.data["search"]["regions"] if r.get("enabled", True)]
+        """Только включённые для АКТИВНОЙ площадки — то, по чему агент реально
+        ходит в этом сеансе. Старые записи без ключа "enabled" (до этой
+        настройки) считаются включёнными, а без ключа "site" (до появления
+        мультидоменности) — принадлежащими hh.ru, так что поведение у
+        существующих пользователей после обновления не меняется."""
+        site_id = self.active_site_id
+        return [r for r in self.data["search"]["regions"]
+                if r.get("enabled", True) and r.get("site", "hh.ru") == site_id]
 
     @property
     def experience(self) -> list[str]:
@@ -385,6 +412,17 @@ class Settings:
     def require_letter(self) -> bool:
         """Не отправлять отклик, если сопроводительное приложить не удалось."""
         return bool(self.data["search"].get("require_letter", True))
+
+    @property
+    def letter_style(self) -> str:
+        """Id выбранного стиля письма — см. ai_analyzer.LETTER_STYLES."""
+        return self.data.get("letters", {}).get("style", "business")
+
+    @property
+    def letters_review_enabled(self) -> bool:
+        """Второй проход модели перед отправкой письма — см.
+        ai_analyzer.review_cover_letter."""
+        return bool(self.data.get("letters", {}).get("review_enabled", True))
 
     @property
     def exclusions(self) -> str:

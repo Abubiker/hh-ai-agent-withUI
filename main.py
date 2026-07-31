@@ -99,8 +99,9 @@ async def agent_loop():
     # Отсчёт времени стартует только сейчас, чтобы ручной логин не съедал лимит
     control.arm()
 
-    # Слушатель терминала ставим ПОСЛЕ логина: во время входа скрипт сам читает
-    # stdin (ждёт Enter), и два читателя конфликтовали бы.
+    # Слушатель терминала ставим ПОСЛЕ логина: до него нечего останавливать —
+    # агент ещё не начал работу, а вход теперь ждёт сам себя на странице,
+    # без участия stdin.
     has_reader = _install_terminal_stop(asyncio.get_running_loop())
     print("\n" + "=" * 46)
     print("⏹️  КАК ОСТАНОВИТЬ В ЛЮБОЙ МОМЕНТ:")
@@ -137,6 +138,78 @@ async def agent_loop():
             await control.sleep_or_stop(pause * 60)
     finally:
         await finish(client)
+
+
+async def probe_site(site_id: str):
+    """Разведка разметки площадки СНГ перед тем, как доверять ей боевые
+    селекторы (см. риск паритета data-qa в плане мультидоменности).
+
+    Открывает выдачу, первую вакансию и форму отклика ЖИВЫМ окном браузера
+    (headful — при первом заходе нужно войти вручную) и печатает, что на
+    самом деле нашлось: data-qa кнопок и полей, наличие блока с описанием
+    вакансии, карточек чатов. Ничего не сохраняет, ни на что не откликается.
+
+    Использование: python main.py --probe-site hh.kz
+    """
+    import sites
+    site = sites.by_id(site_id)
+    if not site:
+        print(f"Неизвестный сайт: {site_id!r}. Доступные: "
+              f"{', '.join(s['id'] for s in sites.all_sites())}")
+        return
+
+    from hh_client import HHClient, dump_buttons, dump_textareas, handle_vpn_check
+
+    client = HHClient(site=site)
+    await client.start()
+    if not await client.login_if_needed():
+        print("Не авторизован — вход не пройден, дамп невозможен.")
+        await client.stop()
+        return
+
+    page = client.page
+    base = sites.base_url(site)
+
+    print(f"\n=== {site['host']}: выдача ===")
+    await page.goto(f"{base}/search/vacancy?text=QA&search_field=name",
+                     wait_until="domcontentloaded")
+    await asyncio.sleep(3)
+    await handle_vpn_check(page)
+    items = await page.locator('a[data-qa="serp-item__title"]').all()
+    print(f"ссылок a[data-qa=serp-item__title]: {len(items)}")
+    href = await items[0].get_attribute("href") if items else None
+
+    if href:
+        print(f"\n=== {site['host']}: страница вакансии ===")
+        await page.goto(href, wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+        await handle_vpn_check(page)
+        has_desc = await page.locator('div[data-qa="vacancy-description"]').count()
+        print(f"div[data-qa=vacancy-description] найден: {bool(has_desc)}")
+        await dump_buttons(page)
+
+        apply_btn = page.locator('a[data-qa="vacancy-response-link-top"]').first
+        if await apply_btn.count() and await apply_btn.is_visible():
+            await apply_btn.click()
+            await asyncio.sleep(2)
+            print(f"\n=== {site['host']}: форма отклика ===")
+            await dump_textareas(page)
+            await dump_buttons(page)
+        else:
+            print("a[data-qa=vacancy-response-link-top] не найдена/не видна — "
+                  "дамп формы отклика пропущен (возможно, отклик уже был).")
+    else:
+        print("В выдаче нет вакансий по запросу «QA» — дамп страницы вакансии пропущен.")
+
+    print(f"\n=== {site['host']}: чаты ===")
+    await page.goto(f"{base}/applicant/negotiations", wait_until="domcontentloaded")
+    await asyncio.sleep(2)
+    cards = await page.locator('div[data-qa="negotiations-item"]').count()
+    print(f"div[data-qa=negotiations-item] найдено: {cards}")
+
+    await client.stop()
+    print(f"\nГотово. Сверьте вывод с дампом hh.ru перед тем, как полагаться "
+          f"на {site['host']} в боевом режиме.")
 
 
 def _install_sigint_handler(loop):
@@ -207,7 +280,14 @@ async def main():
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n🛑 Принудительная остановка.")
+    if len(sys.argv) > 1 and sys.argv[1] == "--probe-site":
+        site_arg = sys.argv[2] if len(sys.argv) > 2 else "hh.ru"
+        try:
+            asyncio.run(probe_site(site_arg))
+        except KeyboardInterrupt:
+            print("\n🛑 Прервано.")
+    else:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            print("\n🛑 Принудительная остановка.")

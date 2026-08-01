@@ -2,6 +2,7 @@
 const ICON = {
   // навигация (16×16, stroke 1.4)
   navWork: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.4"/><path d="M6.6 5.6 10.4 8l-3.8 2.4V5.6Z" fill="currentColor"/></svg>`,
+  navStats: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3.2 12.8V9.4M8 12.8V5.2M12.8 12.8V7.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
   navResume: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="2.2" width="9.6" height="11.6" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M5.8 6h4.4M5.8 8.6h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>`,
   navFilters: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.4 5.4h11.2M2.4 10.6h11.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="6" cy="5.4" r="1.9" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/><circle cx="10.4" cy="10.6" r="1.9" fill="var(--bg)" stroke="currentColor" stroke-width="1.4"/></svg>`,
   navModel: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2.2 13.2 5v6L8 13.8 2.8 11V5L8 2.2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,

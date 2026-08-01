@@ -538,7 +538,7 @@ class HHClient:
         self.browser = None
         self.context = None
         self.page = None
-        self.stats = Stats()
+        self.stats = Stats.load()
         # Память на сеанс: какие вакансии уже встречались (для раннего обрыва
         # пагинации на повторных проверках) и о каких пропусках уже сообщали
         # (чтобы не спамить лог одними и теми же строками каждую проверку).
@@ -728,7 +728,7 @@ class HHClient:
                             # модели), но пользователю казалось, что агент
                             # «обрабатывает одни и те же вакансии заново». Счётчик
                             # делает это видимым в итоге цикла (см. ui_app.py).
-                            self.stats.db_skipped += 1
+                            self.stats.bump("db_skipped")
                             continue
 
                         # Вакансия встречена впервые за сеанс — даже если её сейчас
@@ -738,7 +738,7 @@ class HHClient:
                         # обрываются сразу.
                         if job_id not in self._seen_ids:
                             self._seen_ids.add(job_id)
-                            self.stats.fresh += 1
+                            self.stats.bump("fresh")
                             new_on_page += 1
 
                         if control.should_stop():
@@ -755,11 +755,11 @@ class HHClient:
                             if job_id not in self._skip_logged:
                                 self._skip_logged.add(job_id)
                                 database.mark_skip_seen(job_id)
-                                self.stats.hard_skipped += 1
+                                self.stats.bump("hard_skipped")
                                 print(f"⏩ Пропускаю (не тот грейд/профессия — '{hit}'): {title}")
                             continue
 
-                        self.stats.viewed += 1
+                        self.stats.bump("viewed")
                         print(f"👁️ Открываем вакансию: {title}")
                         page = await hh_session.new_stealth_page(self.context)
                         try:
@@ -865,7 +865,7 @@ class HHClient:
 
                             # Анализ ИИ
                             if await is_vacancy_suitable(title, description):
-                                self.stats.ai_pass += 1
+                                self.stats.bump("ai_pass")
                                 print(f"✨ Вакансия подходит: {title}")
 
                                 # Письмо пишется ~12 секунд — без этой строки в логе
@@ -878,7 +878,7 @@ class HHClient:
                                 _trace(f"letter: генерация начата ({title})")
                                 cover_letter = await generate_cover_letter(
                                     title, description, style=letter_style)
-                                self.stats.letters += 1
+                                self.stats.bump("letters")
                                 _trace("letter: получено, ищу кнопку отклика")
 
                                 # Пробуем откликнуться
@@ -932,12 +932,17 @@ class HHClient:
                                     # теста, а отклик не создавался вовсе. Тест должен
                                     # проходить человек — отдаём вакансию ему.
                                     if await page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').count() > 0:
-                                        self.stats.needs_manual += 1
+                                        self.stats.bump("needs_manual")
                                         database.add_applied_job(job_id, title, href)
-                                        print(f"📝 Вакансия с тестом работодателя, нужен ручной отклик: {title}")
+                                        print(f"📝 Вакансия с тестом работодателя, нужен ручной отклик: "
+                                              f"{title} — {href}")
+                                        import html as _html
                                         await send_notification_func(
                                             f"📝 <b>Тестовое задание</b>: <a href='{href}'>{title}</a>\n\n"
-                                            f"<i>Работодатель просит ответить на вопросы — откликнитесь вручную.</i>",
+                                            f"<i>Работодатель просит ответить на вопросы — откликнитесь "
+                                            f"вручную.</i>\n\n"
+                                            f"Сопроводительное письмо уже готово:\n\n"
+                                            f"<i>{_html.escape(cover_letter)}</i>",
                                             kind="applied")
                                         raise SkipVacancy("employer_test")
 
@@ -965,7 +970,7 @@ class HHClient:
                                     # в уведомление вместе с готовым письмом — откликнуться
                                     # вручную дешевле, чем сжечь вакансию впустую.
                                     if not letter_sent and settings.require_letter:
-                                        self.stats.skipped_no_letter += 1
+                                        self.stats.bump("skipped_no_letter")
                                         database.add_applied_job(job_id, title, href)
                                         import html as _html
                                         await send_notification_func(
@@ -1003,7 +1008,7 @@ class HHClient:
                                         _trace("apply: проверяю подтверждение отклика сайтом")
                                         if not await response_confirmed(page, href):
                                             attempts = database.bump_failed_response(job_id, title)
-                                            self.stats.apply_failed += 1
+                                            self.stats.bump("apply_failed")
                                             print(f"❗ Отклик НЕ подтверждён сайтом (попытка {attempts}): {title}")
                                             if attempts >= MAX_RESPONSE_ATTEMPTS:
                                                 # Хватит: помечаем обработанной, иначе вакансия
@@ -1019,9 +1024,9 @@ class HHClient:
                                         database.add_applied_job(
                                             job_id, title, href,
                                             style=letter_style if letter_sent else None)
-                                        self.stats.applied += 1
+                                        self.stats.bump("applied")
                                         if not letter_sent:
-                                            self.stats.applied_no_letter += 1
+                                            self.stats.bump("applied_no_letter")
 
                                         import html
                                         safe_cover_letter = html.escape(cover_letter)
@@ -1037,7 +1042,7 @@ class HHClient:
                                         # счётчика вакансия молча возвращалась в обработку на
                                         # каждом проходе и каждый раз тратила цикл модели.
                                         attempts = database.bump_failed_response(job_id, title)
-                                        self.stats.apply_failed += 1
+                                        self.stats.bump("apply_failed")
                                         print(f"❗ Кнопка отправки не найдена (попытка {attempts}): {title}")
                                         await dump_buttons(page)
                                         if attempts >= MAX_RESPONSE_ATTEMPTS:
@@ -1047,7 +1052,7 @@ class HHClient:
                                     # выглядит недогруженная страница, поэтому не гадаем, а
                                     # спрашиваем hh.
                                     if await response_confirmed(page, href):
-                                        self.stats.already += 1
+                                        self.stats.bump("already")
                                         print(f"Отклик уже был отправлен ранее: {title}")
                                         database.add_applied_job(job_id, title, href)
                                     else:
@@ -1056,7 +1061,7 @@ class HHClient:
                                         if attempts >= MAX_RESPONSE_ATTEMPTS:
                                             database.add_applied_job(job_id, title, href)
                             else:
-                                self.stats.ai_reject += 1
+                                self.stats.bump("ai_reject")
                                 print(f"❌ ИИ отклонил: {title}")
                                 database.add_applied_job(job_id, title, href) # Добавляем, чтобы больше не анализировать
 
@@ -1064,7 +1069,7 @@ class HHClient:
                             # Эти случаи уже посчитаны своими счётчиками — иначе
                             # вакансия попала бы сразу в два.
                             if str(skip) not in ("no_letter", "employer_test", "not_confirmed"):
-                                self.stats.skipped_page += 1
+                                self.stats.bump("skipped_page")
                         except Exception as e:
                             # Сюда попадает и сбой связи с моделью (is_vacancy_suitable бросает
                             # исключение). Вакансию НЕ записываем в базу — вернёмся к ней позже.

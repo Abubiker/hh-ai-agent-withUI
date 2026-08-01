@@ -269,7 +269,7 @@ async def run(only: str | None = None) -> bool:
         await steps[only]()
         return await step_ready()
 
-    print(c("\nНастройка HH Agent", BOLD))
+    print(c("\nНастройка AbuHH", BOLD))
     print(c(f"Всё сохраняется в {settings.path}", DIM))
     print(c("Enter оставляет значение в скобках без изменений.", DIM))
     total = len(steps)

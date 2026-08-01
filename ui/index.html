@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>HH Agent</title>
+<title>AbuHH</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -10,7 +10,7 @@
 
   <!-- ==================== ЗАГОЛОВОК ==================== -->
   <header class="titlebar">
-    <div class="app-name">HH Agent</div>
+    <div class="app-name">AbuHH</div>
     <div class="spacer"></div>
     <div id="savedIndicator" class="session-live" style="color:var(--ok);display:none">
       <i data-icon="check12"></i> Сохранено
@@ -40,10 +40,11 @@
       </div>
       <div class="nav">
         <button class="nav-item active" data-tab="work"><i data-icon="navWork"></i> Работа<span class="badge" id="navWorkBadge"></span></button>
+        <button class="nav-item" data-tab="stats"><i data-icon="navStats"></i> Статистика</button>
         <button class="nav-item" data-tab="resume"><i data-icon="navResume"></i> Резюме и поиск</button>
         <button class="nav-item" data-tab="filters"><i data-icon="navFilters"></i> Фильтры</button>
         <button class="nav-item" data-tab="model"><i data-icon="navModel"></i> Модель<span class="dot-err" id="navModelErr" style="display:none"></span></button>
-        <button class="nav-item" data-tab="notify"><i data-icon="navNotify"></i> Уведомления</button>
+        <button class="nav-item" data-tab="notify"><i data-icon="navNotify"></i> Настройки</button>
         <button class="nav-item" data-tab="chat"><i data-icon="navChat"></i> Чат</button>
       </div>
       <div class="sidebar-footer">
@@ -106,7 +107,6 @@
               <div class="value" id="heroApplied">0</div>
               <div class="note"><span class="dot"></span><span id="heroNote">Всё готово к запуску</span></div>
             </div>
-            <div class="card" style="flex:1;min-width:0" id="funnelCardIdle"></div>
           </div>
 
           <!-- состояние: работает -->
@@ -122,9 +122,8 @@
             </div>
           </div>
 
-          <!-- вторая строка: воронка (если не idle) + журнал -->
+          <!-- вторая строка: журнал -->
           <div class="row" style="flex:1" id="secondRow">
-            <div class="card" id="funnelCardSecond"></div>
             <div class="card log-card" style="flex:1;min-width:0">
               <div class="log-toolbar">
                 <div class="card-title">Журнал</div>
@@ -154,6 +153,14 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- ---------- СТАТИСТИКА ---------- -->
+      <section class="tab-page" id="tab-stats">
+        <div class="content" style="flex:1">
+          <div class="page-head"><div class="page-head-text"><h1>Статистика</h1><div class="sub">Воронка по всем запускам агента</div></div></div>
+          <div class="card" id="funnelCard"></div>
         </div>
       </section>
 
@@ -435,10 +442,21 @@
         </div>
       </section>
 
-      <!-- ---------- УВЕДОМЛЕНИЯ ---------- -->
+      <!-- ---------- НАСТРОЙКИ ---------- -->
       <section class="tab-page" id="tab-notify">
         <div class="content" style="flex:1">
-          <div class="page-head"><div class="page-head-text"><h1>Уведомления</h1><div class="sub">Чтобы не держать окно открытым</div></div></div>
+          <div class="page-head"><div class="page-head-text"><h1>Настройки</h1><div class="sub">Уведомления, тема оформления и хранение данных</div></div></div>
+
+          <div class="row">
+            <div class="card" style="flex:0 1 322px;min-width:260px">
+              <div class="card-title">Тема</div>
+              <div class="provider-seg" id="themeSeg">
+                <button data-theme="light">Светлая</button>
+                <button data-theme="dark">Тёмная</button>
+                <button data-theme="system" class="active">Системная</button>
+              </div>
+            </div>
+          </div>
 
           <div class="row">
             <div class="card" style="flex:1">
@@ -596,19 +614,35 @@
       <div class="onboard-dot" data-step="1"></div>
       <div class="onboard-dot" data-step="2"></div>
       <div class="onboard-dot" data-step="3"></div>
+      <div class="onboard-dot" data-step="4"></div>
     </div>
 
-    <!-- Шаг 1: вход -->
+    <!-- Шаг 1: сайт -->
     <div class="onboard-step" id="onboardStep1">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
-          <div class="title">Вход в hh.ru</div>
+          <div class="title">Выберите сайт</div>
+          <div class="desc">У каждого сайта свой вход и свои регионы. Интерфейс сайта должен быть на русском.</div>
+        </div>
+      </div>
+      <div class="provider-seg" id="onboardSiteSeg"></div>
+      <div class="row" style="align-items:center;justify-content:flex-end">
+        <button class="btn btn-primary" id="btnOnboardSiteNext">Продолжить</button>
+      </div>
+    </div>
+
+    <!-- Шаг 2: вход -->
+    <div class="onboard-step" id="onboardStep2" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title" id="onboardLoginTitle">Вход в hh.ru</div>
           <div class="desc">Откроется окно браузера — войдите в свой аккаунт, как обычно.</div>
         </div>
       </div>
       <div id="onboardLoginIdle">
-        <button class="btn btn-primary" id="btnOnboardLogin">Войти в hh.ru</button>
+        <button class="btn btn-primary" id="btnOnboardLogin">Войти</button>
       </div>
       <div id="onboardLoginWait" style="display:none">
         <div class="hint">Ждём вход в открывшемся окне — как только он будет виден на странице, продолжим сами.</div>
@@ -617,8 +651,8 @@
       <div class="hint" id="onboardLoginError" style="display:none;color:var(--err)"></div>
     </div>
 
-    <!-- Шаг 2: резюме -->
-    <div class="onboard-step" id="onboardStep2" style="display:none">
+    <!-- Шаг 3: резюме -->
+    <div class="onboard-step" id="onboardStep3" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
@@ -642,14 +676,14 @@
           <button class="btn btn-primary" id="btnOnboardManualFinish">Сохранить и начать работу</button>
         </div>
       </div>
-      <div class="row" style="align-items:center" id="onboardStep2Actions">
+      <div class="row" style="align-items:center" id="onboardStep3Actions">
         <div class="spacer" style="flex:1"></div>
         <button class="btn" id="btnOnboardManualResume">Ввести вручную</button>
       </div>
     </div>
 
-    <!-- Шаг 3: профиль -->
-    <div class="onboard-step" id="onboardStep3" style="display:none">
+    <!-- Шаг 4: профиль -->
+    <div class="onboard-step" id="onboardStep4" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">

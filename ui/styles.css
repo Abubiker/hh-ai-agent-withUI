@@ -1,8 +1,8 @@
-/* HH Agent — дизайн-система по макету дизайнера (maket/).
+/* AbuHH — дизайн-система по макету дизайнера (maket/).
    Токены, радиусы, тени и компоненты перенесены из HH Agent Spec.dc.html
    и HH Agent macOS.dc.html дословно (см. значения в комментариях).
-   Тема следует системной (prefers-color-scheme) — окно живёт в pywebview,
-   отдельного переключателя темы в приложении нет. */
+   Тема по умолчанию следует системной (prefers-color-scheme), но её можно
+   переключить вручную на вкладке «Настройки» — см. :root[data-theme]. */
 
 :root {
   color-scheme: dark;
@@ -57,6 +57,50 @@
   }
 }
 
+/* Ручной выбор темы (см. вкладку «Настройки») — перебивает
+   prefers-color-scheme по каскаду (атрибутный селектор специфичнее
+   голого :root в медиа-блоке выше). "Системная" — без атрибута,
+   поведение как раньше, только через медиа-запрос. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111113;
+  --surf: #18181B;
+  --surf2: #212125;
+  --line: #FFFFFF14;
+  --line2: #FFFFFF0D;
+  --text: #F5F5F7;
+  --dim: #9A9AA2;
+  --faint: #6E6E76;
+  --accent-fallback: #0A84FF;
+  --ok: #30D158;
+  --warn: #FF9F0A;
+  --err: #FF453A;
+  --log: #0C0C0E;
+  --focus-alpha: 40%;
+  --shadow-window: 0 30px 70px rgba(0, 0, 0, .55);
+  --shadow-modal: 0 26px 60px rgba(0, 0, 0, .5);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #F4F4F6;
+  --surf: #FFFFFF;
+  --surf2: #E6E6EC;
+  --line: #0000001A;
+  --line2: #00000010;
+  --text: #1D1D1F;
+  --dim: #6E6E73;
+  --faint: #98989E;
+  --accent-fallback: #0071E3;
+  --ok: #1D8F4E;
+  --warn: #B25000;
+  --err: #D33A32;
+  --log: #FAFAFC;
+  --focus-alpha: 30%;
+  --shadow-window: 0 20px 48px rgba(0, 0, 0, .13);
+  --shadow-modal: 0 20px 48px rgba(0, 0, 0, .13);
+}
+
 @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.86); } }
 @keyframes shimmer { 0% { background-position: -220px 0; } 100% { background-position: 320px 0; } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -68,7 +112,10 @@
 * { box-sizing: border-box; }
 
 html, body {
-  height: 100%; margin: 0; background: var(--bg); color: var(--text);
+  height: 100%; margin: 0; color: var(--text);
+  /* Тонкий блик сверху/затемнение снизу — по maket/HH Agent macOS v2.dc.html
+     (var(--bg) само по себе плоское, глянец добавляет глубины окну). */
+  background: linear-gradient(180deg, rgba(255, 255, 255, .045) 0%, rgba(255, 255, 255, 0) 16%, rgba(0, 0, 0, .05) 100%), var(--bg);
   font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -101,7 +148,8 @@ input, textarea, .mono, .banner .desc, .modal .desc,
 
 header.titlebar {
   height: 52px; flex: none; display: flex; align-items: center; gap: 14px;
-  padding: 0 16px 0 18px; border-bottom: 1px solid var(--line2); background: var(--surf);
+  padding: 0 16px 0 18px; border-bottom: 1px solid var(--line2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .08), rgba(255, 255, 255, 0) 65%), var(--surf);
   -webkit-app-region: drag;
 }
 header.titlebar .app-name { font: 600 13px/1 -apple-system, system-ui, sans-serif; letter-spacing: -.01em; }
@@ -157,7 +205,8 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 
 .sidebar {
   width: 236px; flex: none; display: flex; flex-direction: column; padding: 16px 12px;
-  border-right: 1px solid var(--line2); background: var(--bg);
+  border-right: 1px solid var(--line2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .03), rgba(0, 0, 0, .04)), var(--bg);
 }
 
 .sidebar-status { display: flex; align-items: center; gap: 9px; padding: 10px 12px 14px; }
@@ -196,7 +245,9 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 /* ---------- карточки ---------- */
 
 .card {
-  background: var(--surf); border: 1px solid var(--line); border-radius: var(--radius-card);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .05), rgba(255, 255, 255, 0) 45%), var(--surf);
+  border: 1px solid var(--line); border-radius: var(--radius-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
   padding: 20px 22px; display: flex; flex-direction: column; gap: 14px;
 }
 .card-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -258,7 +309,10 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 .now-chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .now-chip { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 8px; background: var(--surf2); font-size: 12px; color: var(--dim); white-space: nowrap; }
 
-.now-box { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: var(--radius-inner); background: var(--surf2); }
+.now-box {
+  display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: var(--radius-inner);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .04), rgba(255, 255, 255, 0) 50%), var(--surf2);
+}
 .now-box-line { display: flex; align-items: center; gap: 10px; }
 .now-box-line .title { font: 590 13.5px/1.35 -apple-system, system-ui, sans-serif; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .now-box-line .timer { font: 400 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); flex: none; }
@@ -353,7 +407,7 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 .chat-typing { display: flex; align-items: center; gap: 8px; align-self: flex-start; font-size: 12px; color: var(--faint); }
 .chat-typing .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s ease-in-out infinite; }
 .chat-input-row { display: flex; gap: 10px; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--line2); flex: none; }
-.chat-input { flex: 1; max-height: 140px; resize: none; }
+.chat-input { flex: 1; min-width: 0; max-height: 140px; resize: none; }
 .chat-attach-btn { width: 34px; height: 34px; padding: 0; flex: none; }
 .chat-attach-preview { display: flex; align-items: center; gap: 8px; padding: 6px 2px 0; }
 .chat-attach-preview img { height: 40px; border-radius: 6px; object-fit: cover; }
@@ -590,10 +644,8 @@ textarea.mono { font: 400 12.5px/1.65 ui-monospace, SFMono-Regular, Menlo, monos
 .model-row .use:hover { text-decoration: underline; }
 .model-row .del.confirm { color: var(--err); font-weight: 590; }
 
-/* Воронка рядом с журналом. Узкий вариант — когда агент работает: там же
-   появляется карточка «Сейчас делаю», и воронке нужно меньше места. */
-#funnelCardSecond { flex: 0 1 340px; min-width: 240px; }
-#funnelCardSecond.narrow { flex-basis: 288px; }
+/* Воронка на вкладке «Статистика». */
+#funnelCard { flex: none; }
 
 /* ---------- утилиты ---------- */
 /* wrap обязателен: без него карточки с заданной шириной не помещаются в узкое

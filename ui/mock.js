@@ -45,6 +45,7 @@
     },
     schedule: { cycle_pause_minutes: 10 },
     security: { use_keychain: false },
+    ui: { theme: "system" },
     _secrets: { tg_bot_token: true, anthropic_api_key: false, openai_api_key: false },
   };
 
@@ -125,7 +126,7 @@
           settings._secrets.openai_api_key = true;
         }
         if (d && d.llm) Object.assign(settings.llm, d.llm);
-        return ok({ path: "~/Library/Application Support/HHAgent/settings.json" });
+        return ok({ path: "~/Library/Application Support/AbuHH/settings.json" });
       },
       get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
       setup_status: () => Promise.resolve(setup),
@@ -220,6 +221,7 @@
       send_chat_message: (text, image) => { chatDemo(text, false, image); return ok(); },
       retry_last_chat_message: () => { chatDemo(mockLastUserText, true); return ok(); },
       reset_chat: () => ok(),
+      get_chat_history: () => Promise.resolve([]),
     },
   };
 

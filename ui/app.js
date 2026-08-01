@@ -1,4 +1,4 @@
-/* HH Agent — логика интерфейса. Работает поверх window.pywebview.api (см. ui_app.py)
+/* AbuHH — логика интерфейса. Работает поверх window.pywebview.api (см. ui_app.py)
  * или поверх заглушки ui/mock.js, если открыто в обычном браузере с ?mock=1. */
 const $ = id => document.getElementById(id);
 const api = () => window.pywebview.api;
@@ -62,7 +62,11 @@ async function loadSettings() {
   $("exclusions").value = s.search.exclusions || "";
 
   $("maxPagesVal").textContent = s.search.max_pages_per_query || "до конца";
-  $("pauseVal").textContent = s.schedule.cycle_pause_minutes + " мин";
+  $("pauseVal").textContent = s.schedule.cycle_pause_minutes
+    ? s.schedule.cycle_pause_minutes + " мин" : "без паузы";
+
+  $("themeSeg").querySelectorAll("button").forEach(b => b.classList.toggle("active", b.dataset.theme === s.ui.theme));
+  applyTheme(s.ui.theme);
 
   renderExperience();
   renderRegions();
@@ -180,6 +184,35 @@ function scheduleSave() {
   }, 500);
 }
 
+function applyTheme(theme) {
+  // "system" — без атрибута, поведение как раньше (только @media
+  // prefers-color-scheme, см. styles.css). light/dark — явный оверрайд.
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.dataset.theme = theme;
+  } else {
+    delete document.documentElement.dataset.theme;
+  }
+}
+
+function scheduleTempoSave() {
+  // Отдельно от scheduleSave(): та шлёт весь collect(), включая ещё не
+  // сохранённые правки резюме/списка запросов (см. collectWithoutModel).
+  // Темп (степперы) шлём частично — только эти два поля, чтобы не утащить
+  // в файл чужой черновик с вкладки «Фильтры/Резюме».
+  clearTimeout(state.tempoSaveTimer);
+  state.tempoSaveTimer = setTimeout(async () => {
+    const maxPages = /^\d+$/.test($("maxPagesVal").textContent.trim())
+      ? parseInt($("maxPagesVal").textContent, 10) : 0;
+    const pause = /^\d+$/.test($("pauseVal").textContent.trim())
+      ? parseInt($("pauseVal").textContent, 10) : 0;
+    const r = await api().save_settings({
+      search: {max_pages_per_query: maxPages},
+      schedule: {cycle_pause_minutes: pause},
+    });
+    if (r.ok) { $("settingsPath").textContent = r.path; flashSaved(); }
+  }, 500);
+}
+
 function flashSaved() {
   const el = $("savedIndicator");
   el.style.display = "flex";
@@ -215,6 +248,8 @@ function updateSidebarFooter() {
 // поэтому остаются мгновенными, как раньше.
 
 function frSnapshot() {
+  // max_pages/pause сюда не входят — они сохраняются отдельно и сразу,
+  // см. scheduleTempoSave().
   return JSON.stringify({
     resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
     style: activeLetterStyle(),
@@ -223,8 +258,6 @@ function frSnapshot() {
     title_only: hasClass("titleOnlySwitch", "on"),
     require_letter: hasClass("requireLetterSwitch", "on"),
     exclusions: $("exclusions").value,
-    max_pages: $("maxPagesVal").textContent,
-    pause: $("pauseVal").textContent,
     experience: [...document.querySelectorAll("#expList .check.checked")].map(c => c.dataset.v),
   });
 }
@@ -400,8 +433,11 @@ function activeSiteId() {
   return (state.settings && state.settings.site && state.settings.site.active) || "hh.ru";
 }
 
-async function renderSiteSeg() {
-  const seg = $("siteSeg");
+async function renderSiteSeg(containerId = "siteSeg") {
+  // Один и тот же рендерер обслуживает и вкладку «Фильтры» (#siteSeg), и
+  // шаг 1 мастера первого запуска (#onboardSiteSeg) — до входа выбор сайта
+  // больше нигде не показать (мастер модальный, без выхода до входа).
+  const seg = $(containerId);
   if (!seg) return;
   const data = await loadSites();
   const active = activeSiteId();
@@ -416,8 +452,17 @@ async function renderSiteSeg() {
     areasCache = null;
     sitesCache = null;
     await loadSettings();
+    renderSiteSeg("onboardSiteSeg");
+    updateOnboardLoginTitle();
     refreshSetup();
   });
+}
+
+function updateOnboardLoginTitle() {
+  const el = $("onboardLoginTitle");
+  if (!el) return;
+  const site = sitesCache && sitesCache.sites.find(s => s.id === activeSiteId());
+  el.textContent = "Вход в " + (site ? site.name : "hh.ru");
 }
 
 /** Показывает кнопку установки, только пока Camoufox (единственный
@@ -452,7 +497,7 @@ function renderExperience() {
   });
 }
 
-function stepperWire(name, {min, max, step = 1, fmt}) {
+function stepperWire(name, {min, max, step = 1, fmt, autosave = false}) {
   const el = document.querySelector(`[data-stepper="${name}"]`);
   el.querySelectorAll("button").forEach(b => b.onclick = () => {
     const valEl = $(name + "Val");
@@ -462,7 +507,10 @@ function stepperWire(name, {min, max, step = 1, fmt}) {
     cur = Math.max(min, Math.min(max, cur + (+b.dataset.d) * step));
     valEl.textContent = fmt(cur);
     if (name === "maxPages") { updateMaxPagesHint(); updateQueriesInfo(); }
-    markFrDirty();
+    // Темп работы — не профиль/резюме, случайно не испортишь, поэтому
+    // сохраняем сразу, а не ждём отдельной кнопки «Сохранить» (см. пояснение
+    // у frSnapshot про то, что именно требует ручного сохранения).
+    if (autosave) scheduleTempoSave(); else markFrDirty();
   });
 }
 
@@ -1096,8 +1144,18 @@ wireSwitch("letterReviewSwitch", null, { noAutosave: true });
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».
 // Функция была написана, но не вызвана — кнопки +/− не работали вовсе.
-stepperWire("maxPages", { min: 0, max: 10, fmt: v => v === 0 ? "до конца" : String(v) });
-stepperWire("pause", { min: 5, max: 120, step: 5, fmt: v => v + " мин" });
+stepperWire("maxPages", { min: 0, max: 10, fmt: v => v === 0 ? "до конца" : String(v), autosave: true });
+stepperWire("pause", { min: 0, max: 120, step: 5, fmt: v => v === 0 ? "без паузы" : v + " мин", autosave: true });
+
+// Тема — как темп: применяем и сохраняем сразу по клику, без кнопки
+// «Сохранить» (не профиль/резюме, случайно не испортишь).
+$("themeSeg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  $("themeSeg").querySelectorAll("button").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  applyTheme(b.dataset.theme);
+  api().save_settings({ ui: { theme: b.dataset.theme } });
+});
 
 // Автосохранение всех полей ввода. Раньше слушателей не было совсем:
 // правки резюме, адресов и выбор модели в селекте молча терялись.
@@ -1164,6 +1222,15 @@ function renderChatBubble(role, text, opts = {}) {
   box.scrollTop = box.scrollHeight;
   if (opts.error) $("chatRetryBtn").onclick = retryChat;
   return div;
+}
+
+function renderChatHistory(turns) {
+  // Восстанавливает переписку, сохранённую в agent.db (см. database.py:
+  // chat_turns) — чат теперь переживает перезапуск приложения.
+  if (!turns || !turns.length) return;
+  for (const t of turns) {
+    renderChatBubble(t.role === "assistant" ? "assistant" : "user", t.text, { image: t.image });
+  }
 }
 
 function readImageFile(file) {
@@ -1449,15 +1516,7 @@ function updateWorkLayout() {
   $("stateIdle").style.display = (!running && ready) ? "flex" : "none";
   $("stateRunning").style.display = running ? "flex" : "none";
 
-  // Ширину задаём классом, а не пикселями в style: раньше при каждой смене
-  // состояния сюда прописывалось то 288px, то 340px, и карточка заметно
-  // дёргалась — а в узком окне ещё и не давала ряду перенестись.
-  const fSecond = $("funnelCardSecond");
-  fSecond.style.display = ready && !running ? "none" : "";
-  fSecond.classList.toggle("narrow", running);
-
-  renderFunnel(fSecond, state.stats, !ready && !running /* dashes только пока не готово и не запущено */);
-  if (ready && !running) renderFunnel($("funnelCardIdle"), state.stats, false);
+  renderFunnelTab();
 
   $("workSubtitle").textContent = running ? "Можно свернуть окно — агент продолжит и пришлёт уведомление"
     : ready ? "Настройки сохранены. Нажмите «Запустить», когда будете готовы." : "Осталось несколько шагов, потом можно запускать и уходить";
@@ -1474,36 +1533,105 @@ function updateWorkLayout() {
   if (ready && !running) { $("heroApplied").textContent = state.stats.applied; $("heroNote").textContent = `Все письма ушли с профилем «${state.settings?.resume?.target_name || "—"}»`; }
 }
 
+function renderFunnelTab() {
+  // Воронка теперь на отдельной вкладке «Статистика» — не привязана к
+  // running/idle состоянию вкладки «Работа», просто отражает state.stats.
+  const s = state.stats || {};
+  const empty = !(s.viewed || s.hard_skipped);
+  renderFunnel($("funnelCard"), s, empty);
+}
+
+/* Кольцевая диаграмма воронки — по макету maket/HH Agent macOS v2.dc.html,
+   экран "3a Статистика — кольцевая диаграмма воронки". Пять концентрических
+   колец вместо горизонтальных полос: каждое кольцо — доля от total,
+   радиусы/толщина/geometry перенесены из мокапа дословно (r=124..52,
+   stroke-width=14, viewBox 280×280). Числа/цвета — не мокап, а живые данные
+   через те же поля Stats, что раньше питали бары (см. git-историю функции). */
 function renderFunnel(container, stats, dashes) {
   if (!container) return;
   const s = stats || {};
   const total = (s.viewed || 0) + (s.hard_skipped || 0);
-  const rows = [
-    ["Просмотрено", total, "fill", false],
-    ["Прошли фильтр", s.viewed || 0, "fill", false],
-    ["Одобрены ИИ", s.ai_pass || 0, "accent", false],
-    ["Письма", s.letters || 0, "accent-strong", false],
-    ["Отклики", s.applied || 0, "ok", true],
+
+  if (dashes || total === 0) {
+    container.innerHTML = `<div class="empty-tip">
+      <div class="t">Тут появится воронка</div>
+      <div class="d">За вечер агент обычно смотрит около 40 вакансий и отправляет 3–8 откликов. Как только цикл пройдёт хотя бы раз — здесь будут кольца.</div>
+    </div>`;
+    return;
+  }
+
+  const rings = [
+    ["Просмотрено", total, 124, "var(--faint)"],
+    ["Прошли фильтр", s.viewed || 0, 106, "var(--dim)"],
+    ["Одобрены ИИ", s.ai_pass || 0, 88, "color-mix(in srgb, var(--accent) 70%, var(--faint))"],
+    ["Письма написаны", s.letters || 0, 70, "var(--accent)"],
+    ["Отклики", s.applied || 0, 52, "var(--ok)"],
   ];
-  const pct = v => total > 0 ? Math.max(v > 0 ? 4 : 0, Math.min(100, (v / total) * 100)) : 0;
-  const body = rows.map(([label, val, cls, strong]) => `
-    <div class="funnel-row">
-      <div class="label${strong ? " strong" : ""}">${label}</div>
-      <div class="track"><div class="fill ${dashes ? "" : cls}" style="width:${dashes ? 0 : pct(val)}%"></div></div>
-      <div class="num${strong ? " ok" : ""}">${dashes ? "—" : val}</div>
-    </div>`).join("");
-  const breakdown = `<div class="funnel-breakdown">
-    <div class="stat"><b>${dashes ? "—" : (s.hard_skipped || 0)}</b><span>Отсеяно по названию</span></div>
-    <div class="stat"><b>${dashes ? "—" : (s.ai_reject || 0)}</b><span>Отклонил ИИ</span></div>
-    <div class="stat"><b>${dashes ? "—" : (s.already || 0)}</b><span>Уже был отклик</span></div>
-    <div class="stat"><b>${dashes ? "—" : (s.skipped_page || 0)}</b><span>Не открылось</span></div>
-    <div class="stat"><b>${dashes ? "—" : (s.apply_failed || 0)}</b><span>Не удалось</span></div>
-  </div>`;
-  container.innerHTML = `<div class="card-title-row"><div class="card-title">Воронка</div><div class="spacer"></div>
-      ${dashes ? "" : `<div class="hint">из ${total} просмотренных до ${s.applied || 0} откликов</div>`}</div>
-    <div style="display:flex;flex-direction:column;gap:10px${dashes ? ";opacity:.55" : ""}">${body}</div>
-    ${dashes ? `<div class="spacer" style="flex:1"></div><div class="empty-tip"><div class="t">Тут появятся отклики</div><div class="d">За вечер агент обычно смотрит около 40 вакансий и отправляет 3–8 откликов.</div></div>`
-      : `<div class="hairline"></div>${breakdown}`}`;
+  // Как и у баров раньше: ненулевому значению — минимум 2% дуги, иначе
+  // маленькие проценты (3% откликов) были бы не видны глазом на кольце.
+  const frac = v => total > 0 ? Math.max(v > 0 ? 0.02 : 0, Math.min(1, v / total)) : 0;
+  const pct = v => total > 0 ? Math.round((v / total) * 100) : 0;
+
+  const circles = rings.map(([, val, r, color]) => {
+    const c = 2 * Math.PI * r;
+    const off = c * (1 - frac(val));
+    return `<circle cx="140" cy="140" r="${r}" fill="none" stroke="var(--surf2)" stroke-width="14"/>`
+      + `<circle cx="140" cy="140" r="${r}" fill="none" stroke="${color}" stroke-width="14" `
+      + `stroke-linecap="round" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}" `
+      + `style="transition:stroke-dashoffset 500ms ease-out"/>`;
+  }).join("");
+
+  const legend = rings.map(([label, val, , color], i) => {
+    const last = i === rings.length - 1;
+    return `<div style="display:flex;align-items:center;gap:12px">
+      <div style="width:11px;height:11px;border-radius:50%;background:${color};flex:none"></div>
+      <div style="font-size:13px;color:var(--text);flex:1">${esc(label)}</div>
+      <div style="font:${last ? 700 : 600} 15px/1 -apple-system;font-variant-numeric:tabular-nums;color:${last ? "var(--ok)" : "var(--text)"}">${val}</div>
+      <div style="width:44px;text-align:right;font-size:11.5px;color:${last ? "var(--ok)" : "var(--faint)"}">${pct(val)}%</div>
+    </div>`;
+  }).join("");
+
+  const breakdownData = [
+    ["Отсеяно по названию", s.hard_skipped || 0, "var(--faint)"],
+    ["Отклонил ИИ", s.ai_reject || 0, "var(--warn)"],
+    ["Уже был отклик", s.already || 0, "var(--faint)"],
+    ["Не открылось", s.skipped_page || 0, "var(--faint)"],
+    ["Не удалось", s.apply_failed || 0, "var(--err)"],
+  ];
+  const maxBreak = Math.max(1, ...breakdownData.map(([, v]) => v));
+  const breakdown = breakdownData.map(([label, val, color]) => {
+    const r = 27, c = 2 * Math.PI * r;
+    const off = c * (1 - (val > 0 ? val / maxBreak : 0));
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:10px">
+      <div style="position:relative;width:64px;height:64px">
+        <svg width="64" height="64" viewBox="0 0 64 64" style="transform:rotate(-90deg)">
+          <circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--surf2)" stroke-width="7"/>
+          ${val > 0 ? `<circle cx="32" cy="32" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${off.toFixed(1)}"/>` : ""}
+        </svg>
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:700 17px/1 -apple-system;font-variant-numeric:tabular-nums${val === 0 ? ";color:var(--faint)" : ""}">${val}</div>
+      </div>
+      <div style="font-size:11.5px;color:var(--dim);text-align:center;line-height:1.3">${esc(label).replace(" ", "<br>")}</div>
+    </div>`;
+  }).join("");
+
+  container.innerHTML = `
+    <div style="display:flex;gap:34px;align-items:center;flex:1;min-height:0">
+      <div style="flex:none;position:relative;width:280px;height:280px">
+        <svg width="280" height="280" viewBox="0 0 280 280" style="transform:rotate(-90deg)">${circles}</svg>
+        <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+          <div style="font:700 26px/1 -apple-system,'SF Pro Display',system-ui,sans-serif;letter-spacing:-.02em;color:var(--ok);font-variant-numeric:tabular-nums">${s.applied || 0}</div>
+          <div style="font-size:9.5px;color:var(--dim);margin-top:2px">${(s.applied || 0) === 1 ? "отклик" : "откликов"}</div>
+          <div style="font-size:8.5px;color:var(--faint);margin-top:1px">из ${total}</div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:11px">
+        ${legend}
+        <div style="height:1px;background:var(--line2);margin-top:4px"></div>
+        <div style="font-size:11.5px;line-height:1.5;color:var(--faint)">Каждое кольцо — доля от просмотренных вакансий. Чем ближе кольца друг к другу по длине дуги, тем меньше теряется на этом шаге.</div>
+      </div>
+    </div>
+    <div class="hairline"></div>
+    <div style="display:flex;gap:16px">${breakdown}</div>`;
 }
 
 /* ================= журнал ================= */
@@ -1868,7 +1996,7 @@ window.onAgentEvent = (event, data) => {
     if (data && data.ok) {
       $("onboardLoginIdle").style.display = "";
       $("onboardLoginError").style.display = "none";
-      showOnboardStep(2);
+      showOnboardStep(3);
     } else {
       $("onboardLoginIdle").style.display = "";
       $("onboardLoginError").style.display = "";
@@ -1937,19 +2065,23 @@ function needsOnboarding() {
 }
 
 function onboardStartStep() {
+  // Сайт (шаг 1) больше не сменить без нового входа — пропускаем его, если
+  // уже залогинены.
   if (!state.setup.logged_in) return 1;
-  if (!state.setup.resume || !state.setup.summary) return 2;
-  return 3;
+  if (!state.setup.resume || !state.setup.summary) return 3;
+  return 4;
 }
 
 function showOnboardStep(n) {
-  [1, 2, 3].forEach(i => $("onboardStep" + i).style.display = i === n ? "" : "none");
+  [1, 2, 3, 4].forEach(i => $("onboardStep" + i).style.display = i === n ? "" : "none");
   document.querySelectorAll(".onboard-dot").forEach(d => {
     const s = +d.dataset.step;
     d.classList.toggle("active", s === n);
     d.classList.toggle("done", s < n);
   });
-  if (n === 2) enterOnboardStep2();
+  if (n === 1) renderSiteSeg("onboardSiteSeg");
+  if (n === 2) updateOnboardLoginTitle();
+  if (n === 3) enterOnboardResumeStep();
 }
 
 function openOnboarding() {
@@ -1957,12 +2089,12 @@ function openOnboarding() {
   showOnboardStep(onboardStartStep());
 }
 
-function enterOnboardStep2() {
+function enterOnboardResumeStep() {
   $("onboardResumesLoading").style.display = "";
   $("onboardResumesList").style.display = "none";
   $("onboardResumesError").style.display = "none";
   $("onboardManualResume").style.display = "none";
-  $("onboardStep2Actions").style.display = "";
+  $("onboardStep3Actions").style.display = "";
   api().wizard_list_resumes();
 }
 
@@ -1975,7 +2107,7 @@ function renderOnboardResumes(resumes) {
 
 function onboardPickResume(r) {
   onboardState.chosenResume = r;
-  showOnboardStep(3);
+  showOnboardStep(4);
   $("onboardResumeName").value = r.title;
   $("onboardProfileForm").style.display = "none";
   $("onboardProfileErrorBox").style.display = "none";
@@ -2010,6 +2142,8 @@ async function finishOnboarding(name, summary) {
 // поверх первого — оба висели и ждали, окна множились. Бэкенд теперь тоже
 // это отклоняет (AgentBridge._wizard_login_busy), но проверка на клике —
 // более быстрая обратная связь.
+$("btnOnboardSiteNext").onclick = () => showOnboardStep(2);
+
 let onboardLoginBusy = false;
 $("btnOnboardLogin").onclick = () => {
   if (onboardLoginBusy) return;
@@ -2028,7 +2162,7 @@ $("btnOnboardManualResume").onclick = () => {
   $("onboardResumesLoading").style.display = "none";
   $("onboardResumesList").style.display = "none";
   $("onboardResumesError").style.display = "none";
-  $("onboardStep2Actions").style.display = "none";
+  $("onboardStep3Actions").style.display = "none";
   $("onboardManualResume").style.display = "";
 };
 $("btnOnboardManualFinish").onclick = async () => {
@@ -2059,6 +2193,7 @@ window.addEventListener("pywebviewready", async () => {
   await refreshSetup();
   setRunningUi(st.running, st.started_at ? st.started_at : null);
   addLog("Готов к работе.");
+  renderChatHistory(await api().get_chat_history());
   if (needsOnboarding()) openOnboarding();
 });
 

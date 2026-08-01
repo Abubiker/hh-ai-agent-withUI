@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Сборка HH Agent в .app.
+"""Сборка AbuHH в .app.
 
 Осознанные решения:
 
@@ -75,7 +75,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="HHAgent",
+    name="AbuHH",
     debug=False,
     strip=False,
     upx=False,          # upx ломает подпись на macOS
@@ -88,17 +88,17 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="HHAgent",
+    name="AbuHH",
 )
 
 app = BUNDLE(
     coll,
-    name="HH Agent.app",
+    name="AbuHH.app",
     icon=str(ROOT / "build_assets" / "icon.icns"),
-    bundle_identifier="com.dmitrobuber.hhagent",
+    bundle_identifier="com.dmitrobuber.abuhh",
     info_plist={
-        "CFBundleName": "HH Agent",
-        "CFBundleDisplayName": "HH Agent",
+        "CFBundleName": "AbuHH",
+        "CFBundleDisplayName": "AbuHH",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundleVersion": "0.1.0",
         "NSHighResolutionCapable": True,

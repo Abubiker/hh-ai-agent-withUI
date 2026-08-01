@@ -18,7 +18,9 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
-APP_NAME = "HHAgent"
+APP_NAME = "AbuHH"
+# Приложение называлось HHAgent до переименования — см. migrate_legacy_appname().
+LEGACY_APP_NAME = "HHAgent"
 
 # Причины, по которым ИИ отклоняет вакансию. Значение по умолчанию нарочно
 # универсальное — оно годится любой профессии. Своё пишется в окне, вкладка
@@ -126,6 +128,11 @@ DEFAULTS = {
         #         после каждого обновления приложения.
         "use_keychain": False,
     },
+    "ui": {
+        # "light" | "dark" | "system" — "system" следует prefers-color-scheme,
+        # как было раньше (единственный вариант до этой настройки).
+        "theme": "system",
+    },
 }
 
 SECRET_KEYS = ("tg_bot_token", "anthropic_api_key", "openai_api_key")
@@ -151,6 +158,58 @@ def data_dir() -> Path:
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / APP_NAME
+
+
+def _legacy_data_dir() -> Path:
+    """Папка данных под старым именем (HHAgent) — см. migrate_legacy_appname()."""
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    elif os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or Path.home())
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / LEGACY_APP_NAME
+
+
+def migrate_legacy_appname():
+    """Разовая миграция при переименовании HHAgent → AbuHH: копирует (не
+    переносит — старое не трогаем на случай отката) папку данных целиком —
+    резюме, agent.db с историей откликов и статистикой, settings.json и
+    secrets.json (секреты по умолчанию лежат тут же, см. use_keychain) —
+    под новым именем. Идемпотентно: если новая папка уже существует, ничего
+    не делает. Должна вызываться ДО первого обращения к data_dir()/user_file
+    под новым APP_NAME (т.е. до создания модульного singleton `settings`)."""
+    new_dir = data_dir()
+    old_dir = _legacy_data_dir()
+    if not new_dir.exists() and old_dir.exists() and old_dir != new_dir:
+        try:
+            shutil.copytree(old_dir, new_dir)
+            print(f"✅ Данные перенесены из {old_dir} в {new_dir}")
+        except Exception as e:
+            print(f"⚠️ Не удалось перенести данные из {old_dir}: {e}")
+
+    # Секреты в Keychain (только для тех, кто включил use_keychain — по
+    # умолчанию они и так уже перенеслись выше вместе с secrets.json).
+    try:
+        import keyring
+        keys = list(SECRET_KEYS)
+        try:
+            base_url = json.loads((new_dir / "settings.json").read_text(
+                encoding="utf-8"))["llm"]["openai_base_url"]
+            keys.append(Settings.scoped_secret_name("openai_api_key", base_url))
+        except Exception:
+            pass
+        for key in keys:
+            try:
+                if keyring.get_password(APP_NAME, key):
+                    continue  # уже перенесено раньше
+                old_value = keyring.get_password(LEGACY_APP_NAME, key)
+                if old_value:
+                    keyring.set_password(APP_NAME, key, old_value)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def user_file(name: str) -> Path:
@@ -453,6 +512,11 @@ class Settings:
     def tg_bot_token(self) -> str:
         return self.get_secret("tg_bot_token")
 
+    @property
+    def theme(self) -> str:
+        return self.data["ui"]["theme"]
+
 
 # Единственный экземпляр на процесс: и CLI, и UI работают с ним.
+migrate_legacy_appname()
 settings = Settings().load()

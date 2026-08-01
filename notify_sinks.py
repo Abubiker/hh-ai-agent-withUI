@@ -54,7 +54,7 @@ class DesktopSink(Sink):
     """
     name = "desktop"
 
-    def __init__(self, app_name: str = "HH Agent"):
+    def __init__(self, app_name: str = "AbuHH"):
         self._notifier = None
         self._warned = False
         self.app_name = app_name

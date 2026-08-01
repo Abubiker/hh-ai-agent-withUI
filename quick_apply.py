@@ -276,7 +276,8 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             database.add_applied_job(job_id, title, url)
             raise QuickApplyError(
                 f"У вакансии «{title}» есть тест работодателя — на него нужно ответить "
-                f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически.")
+                f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически. "
+                f"Сопроводительное письмо уже готово:\n\n{cover_letter}")
 
         letter_sent = False
         letter_field = await open_letter_field(page)

@@ -33,7 +33,7 @@ async def install_camoufox(on_progress=None) -> tuple[bool, str]:
     кнопке в мастере первого запуска.
 
     Раньше это делал subprocess [sys.executable, "-m", "camoufox", "fetch"].
-    В собранном .app sys.executable — это сам HHAgent, а не python: команда
+    В собранном .app sys.executable — это сам AbuHH, а не python: команда
     вместо установки браузера открывала вторую копию приложения (второе
     окно поверх первого). Поэтому ставим прямо в этом процессе, в фоновом
     потоке, вызывая ту же функцию, что стоит за `camoufox fetch`."""

@@ -66,6 +66,25 @@ def init_db():
             cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Счётчики воронки (Stats, см. stats.py) — раньше жили только в памяти
+    # процесса и обнулялись при каждом перезапуске приложения.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stats_totals (
+            field TEXT PRIMARY KEY,
+            value INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    # История локального чата с ассистентом (вкладка «Чат») — раньше жила
+    # только в AgentBridge._chat_history и обнулялась при перезапуске.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_turns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            image_ref TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -133,6 +152,53 @@ def set_cached_verdict(cache_key: str, verdict: str):
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO verdict_cache (hash, verdict) VALUES (?, ?)",
                    (cache_key, verdict))
+    conn.commit()
+    conn.close()
+
+
+def bump_stat(field: str, amount: int = 1):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO stats_totals (field, value) VALUES (?, ?)
+        ON CONFLICT(field) DO UPDATE SET value = value + excluded.value
+    """, (field, amount))
+    conn.commit()
+    conn.close()
+
+
+def load_stats_totals() -> dict[str, int]:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT field, value FROM stats_totals")
+    totals = {field: value for field, value in cursor.fetchall()}
+    conn.close()
+    return totals
+
+
+def add_chat_turn(role: str, content: str, image_ref: str | None = None):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO chat_turns (role, content, image_ref) VALUES (?, ?, ?)",
+                   (role, content, image_ref))
+    conn.commit()
+    conn.close()
+
+
+def load_chat_turns() -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT role, content, image_ref FROM chat_turns ORDER BY id")
+    turns = [{"role": role, "content": content, "image_ref": image_ref}
+             for role, content, image_ref in cursor.fetchall()]
+    conn.close()
+    return turns
+
+
+def clear_chat_turns():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_turns")
     conn.commit()
     conn.close()
 

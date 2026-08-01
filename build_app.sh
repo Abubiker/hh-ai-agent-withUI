@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Сборка HH Agent в .app и .dmg
+# Сборка AbuHH в .app и .dmg
 #
 # Подпись здесь не формальность: macOS не показывает уведомления от
 # неподписанных программ. Ad-hoc подписи (бесплатной) для личного
@@ -8,8 +8,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 VENV="${VENV:-.venv}"
-APP="dist/HH Agent.app"
-DMG="dist/HHAgent.dmg"
+APP="dist/AbuHH.app"
+DMG="dist/AbuHH.dmg"
 VERSION="$(grep -m1 CFBundleShortVersionString HHAgent.spec | sed 's/[^0-9.]//g')"
 
 echo "==> Иконка"
@@ -39,11 +39,11 @@ rm -f "$DMG"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "HH Agent $VERSION" -srcfolder "$STAGE" \
+hdiutil create -volname "AbuHH $VERSION" -srcfolder "$STAGE" \
   -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
-# Промежуточные файлы PyInstaller удаляем: внутри build/ лежит HHAgent.pkg —
+# Промежуточные файлы PyInstaller удаляем: внутри build/ лежит AbuHH.pkg —
 # это внутренний формат архива PyInstaller, а НЕ установщик. macOS пытается
 # открыть его «Установщиком» и выдаёт ошибку -1, что сбивает с толку.
 echo "==> Уборка промежуточных файлов"
@@ -53,7 +53,7 @@ rm -rf build
 # чтобы «передать другу» было одним действием: архив + инструкция, которая
 # ни на что не ссылается наружу.
 LINUXDIR="for linux"
-SRC="$LINUXDIR/hh-agent-src.tar.gz"
+SRC="$LINUXDIR/abuhh-src.tar.gz"
 if git rev-parse --git-dir >/dev/null 2>&1; then
   echo "==> Папка для Linux"
   rm -rf "$LINUXDIR"; mkdir -p "$LINUXDIR"
@@ -74,6 +74,6 @@ echo "нотаризована Apple. При первом открытии macOS
 echo "нельзя проверить. С macOS 15 правый клик → «Открыть» этот запрет уже"
 echo "не обходит — нужно Системные настройки → Конфиденциальность и"
 echo "безопасность → «Открыть всё равно». Запасной вариант:"
-echo "   xattr -dr com.apple.quarantine \"/Applications/HH Agent.app\""
+echo "   xattr -dr com.apple.quarantine \"/Applications/AbuHH.app\""
 echo
 echo "Сборка только под Apple Silicon. Для Linux передавайте папку «$LINUXDIR»."

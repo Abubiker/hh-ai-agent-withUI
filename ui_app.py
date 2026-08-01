@@ -39,6 +39,7 @@ import webview
 
 import applog
 import control
+import database
 import sites
 from settings import settings
 from notify_sinks import build_sinks
@@ -125,9 +126,15 @@ class AgentBridge:
         self._captcha_future = None
         self._stdout_backup = None
         self._stderr_backup = None
-        # История чата — только в памяти, на диск не пишется: разговор
-        # эфемерный, обнуляется при перезапуске приложения.
-        self._chat_history: list[dict] = []
+        # История чата — persisted в agent.db (chat_turns), переживает
+        # перезапуск приложения. image_b64 в памяти хранит только тело
+        # base64 без data:-префикса (см. send_chat_message), в БД лежит
+        # то же самое под именем image_ref.
+        self._chat_history: list[dict] = [
+            {"role": t["role"], "content": t["content"],
+             **({"image_b64": t["image_ref"]} if t["image_ref"] else {})}
+            for t in database.load_chat_turns()
+        ]
         self._chat_busy = False
         # Гвард на мастер первого запуска: без него повторный клик «Войти»
         # (пока первая попытка ещё ждёт вход) открывал ВТОРОЙ браузер поверх
@@ -172,10 +179,16 @@ class AgentBridge:
         """stderr раньше не перехватывался вовсе — необработанный traceback
         не попадал ни в файл, ни в окно. В файл — как error (это и есть
         обычно traceback), в окно — как warn: один traceback на 15+ строк
-        покрасил бы половину журнала в красный и раздул счётчик «Ошибки»."""
+        покрасил бы половину журнала в красный и раздул счётчик «Ошибки».
+
+        Исключение — вывод модуля `warnings` (origin вида
+        "warnings._showwarnmsg_impl:N", например безобидный
+        multiprocessing.resource_tracker при остановке агента): это не
+        traceback, в файл тоже пишем как warn, а не error."""
         import applog
         where = applog.origin(depth=2)
-        applog.log(line, "error", origin_hint=where)
+        file_level = "warn" if where.startswith("warnings.") else "error"
+        applog.log(line, file_level, origin_hint=where)
         self._emit("log", {"line": line, "level": "warn", "origin": where})
 
     def _start_loop(self):
@@ -390,6 +403,7 @@ class AgentBridge:
         if image_b64:
             turn["image_b64"] = image_b64
         self._chat_history.append(turn)
+        database.add_chat_turn("user", turn["content"], image_b64)
         self._submit(self._run_chat_turn())
         return {"ok": True}
 
@@ -403,7 +417,18 @@ class AgentBridge:
 
     def reset_chat(self):
         self._chat_history = []
+        database.clear_chat_turns()
         return {"ok": True}
+
+    def get_chat_history(self):
+        """Для отрисовки переписки при старте — до этого чат считался
+        эфемерным и рендерился только по событиям (см. app.js: chat_reply)."""
+        def to_data_url(image_b64):
+            return f"data:image/png;base64,{image_b64}" if image_b64 else None
+        return [
+            {"role": t["role"], "text": t["content"], "image": to_data_url(t.get("image_b64"))}
+            for t in self._chat_history
+        ]
 
     async def _run_chat_turn(self):
         """Отправляет накопленную историю модели и рассылает результат
@@ -474,6 +499,7 @@ class AgentBridge:
                 # Детерминированный результат отклика — к модели не ходим,
                 # тут нечего сочинять.
                 self._chat_history.append({"role": "assistant", "content": result.message})
+                database.add_chat_turn("assistant", result.message)
                 self._emit("chat_reply", {"text": result.message})
                 return
 
@@ -504,6 +530,7 @@ class AgentBridge:
                 return
 
             self._chat_history.append({"role": "assistant", "content": reply})
+            database.add_chat_turn("assistant", reply)
             self._emit("chat_reply", {"text": reply})
         finally:
             self._chat_busy = False
@@ -548,6 +575,7 @@ class AgentBridge:
             self.running = True
             self._emit("state", {"running": True})
             client = None
+            stats_at_start = None
             try:
                 # Пересоздаём событие остановки уже внутри нужного цикла
                 control.stop_event = asyncio.Event()
@@ -560,6 +588,10 @@ class AgentBridge:
                 )
                 client = HHClient(sinks=sinks)
                 self.client = client
+                # client.stats теперь накопительный (см. Stats.bump), снепшот
+                # нужен, чтобы итоговое сообщение показывало разницу за этот
+                # запуск, а не всё время работы агента.
+                stats_at_start = dict(client.stats.__dict__)
 
                 await client.start()
                 logged_in = await self._login_client(client)
@@ -615,7 +647,8 @@ class AgentBridge:
                     # Отдельный _log не нужен: sinks включают UISink и сами
                     # пишут итоги в окно — иначе статистика дублировалась.
                     try:
-                        await client.sinks.notify(client.stats.summary(), kind="summary")
+                        await client.sinks.notify(
+                            client.stats.summary(stats_at_start), kind="summary")
                         await client.sinks.close()
                     except Exception:
                         pass
@@ -640,7 +673,10 @@ class AgentBridge:
         return {"ok": True}
 
     def get_state(self):
-        stats = self.client.stats.__dict__ if self.client else Stats().__dict__
+        # Stats.load() читает накопленные тотал-счётчики из agent.db — так
+        # воронка на экране не обнуляется, пока агент не запущен/после
+        # перезапуска приложения (см. stats.py: bump()/load()).
+        stats = self.client.stats.__dict__ if self.client else Stats.load().__dict__
         return {"running": self.running, "stats": stats, "started_at": self.started_at}
 
     # ---------- мастер первого запуска ----------
@@ -739,7 +775,7 @@ class AgentBridge:
             else:
                 try:
                     self._submit(sink.notify(
-                        "HH Agent\nТестовое уведомление — всё работает.")).result(timeout=20)
+                        "AbuHH\nТестовое уведомление — всё работает.")).result(timeout=20)
                     results.append(("Рабочий стол", True, "отправлено"))
                 except Exception as e:
                     results.append(("Рабочий стол", False, str(e)))
@@ -754,7 +790,7 @@ class AgentBridge:
                 try:
                     control.set_telegram_enabled(True)
                     self._submit(TelegramSink().notify(
-                        "🔔 <b>Тестовое уведомление</b>\nHH Agent на связи.")).result(timeout=25)
+                        "🔔 <b>Тестовое уведомление</b>\nAbuHH на связи.")).result(timeout=25)
                     results.append(("Telegram", True, "отправлено"))
                 except Exception as e:
                     results.append(("Telegram", False, str(e)))
@@ -981,7 +1017,7 @@ def build_tray(bridge):
         pystray.Menu.SEPARATOR,
         Item("Выход", quit_app),
     )
-    icon = pystray.Icon("hh-agent", _make_icon_image(False), "HH Agent", menu)
+    icon = pystray.Icon("abuhh", _make_icon_image(False), "AbuHH", menu)
     bridge.tray = icon
     return icon
 
@@ -1003,7 +1039,7 @@ def selftest():
         print("уведомления:", "доступны" if ok else f"недоступны — {why}")
         if ok:
             loop.run_until_complete(
-                DesktopSink().notify("HH Agent\nСамопроверка: уведомления работают."))
+                DesktopSink().notify("AbuHH\nСамопроверка: уведомления работают."))
             print("тестовое уведомление отправлено")
         print("готовность:", loop.run_until_complete(first_run.status()))
 
@@ -1109,7 +1145,7 @@ def main():
 
     bridge = AgentBridge()
     window = webview.create_window(
-        "HH Agent",
+        "AbuHH",
         str(UI_DIR / "index.html"),
         js_api=bridge,
         width=1080,

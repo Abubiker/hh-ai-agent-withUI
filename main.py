@@ -64,12 +64,12 @@ def _install_terminal_stop(loop):
         return False  # не в интерактивном терминале — обойдёмся Ctrl+C
 
 
-async def finish(client):
+async def finish(client, stats_at_start=None):
     """Печатает итоговую статистику (всегда) и рассылает её получателям."""
     # Синхронный print выполняется даже во время отмены задачи (Ctrl+C).
-    print("\n" + client.stats.summary_plain())
+    print("\n" + client.stats.summary_plain(stats_at_start))
     try:
-        await client.sinks.notify(client.stats.summary(), kind="summary")
+        await client.sinks.notify(client.stats.summary(stats_at_start), kind="summary")
     except Exception:
         pass
     try:
@@ -87,6 +87,9 @@ async def agent_loop():
     # Telegram — если пользователь его включил.
     sinks = build_sinks(telegram=control.telegram_enabled, desktop=True)
     client = HHClient(sinks=sinks)
+    # client.stats копится в БД между запусками (см. Stats.bump) — снепшот
+    # нужен для итога именно ЭТОГО сеанса.
+    stats_at_start = dict(client.stats.__dict__)
     await client.start()
 
     # Первая авторизация (на первом запуске — ручной вход в браузере)
@@ -137,7 +140,7 @@ async def agent_loop():
                       f"{client.stats.fresh - fresh_before}. Следующая в {next_at}.")
             await control.sleep_or_stop(pause * 60)
     finally:
-        await finish(client)
+        await finish(client, stats_at_start)
 
 
 async def probe_site(site_id: str):

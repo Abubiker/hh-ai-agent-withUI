@@ -78,6 +78,15 @@ DEFAULTS = {
         "target_name": "",
         "summary": "",
     },
+    "screening": {
+        # Факты для автоответов на текстовые вопросы теста работодателя
+        # (см. ai_analyzer.answer_employer_question) — в свободном тексте
+        # резюме их может не быть, а гадать зарплату/дату выхода нельзя.
+        "salary_expectation": "",
+        "relocation_ready": False,
+        "availability": "",
+        "work_format": "",
+    },
     "letters": {
         # Стиль сопроводительного письма — ровно один, см. ai_analyzer.
         # LETTER_STYLES. "business" — тон сегодняшнего (единственного до
@@ -499,6 +508,22 @@ class Settings:
     @property
     def resume_summary(self) -> str:
         return self.data["resume"]["summary"]
+
+    @property
+    def salary_expectation(self) -> str:
+        return self.data.get("screening", {}).get("salary_expectation", "")
+
+    @property
+    def relocation_ready(self) -> bool:
+        return bool(self.data.get("screening", {}).get("relocation_ready", False))
+
+    @property
+    def availability(self) -> str:
+        return self.data.get("screening", {}).get("availability", "")
+
+    @property
+    def work_format(self) -> str:
+        return self.data.get("screening", {}).get("work_format", "")
 
     @property
     def cycle_pause_minutes(self) -> int:

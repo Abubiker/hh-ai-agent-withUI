@@ -9,7 +9,9 @@ import control
 import sites
 import hh_session
 from stats import Stats
-from ai_analyzer import is_vacancy_suitable, generate_cover_letter, active_style
+from ai_analyzer import (is_vacancy_suitable, generate_cover_letter, active_style,
+                          answer_employer_question, NO_DATA_SENTINEL)
+from llm_providers import ProviderError
 from settings import settings
 from urllib.parse import quote_plus
 
@@ -147,6 +149,51 @@ _COLLECT_TEXTAREAS_JS = """
 """
 
 
+# Собираем вопросы теста работодателя (task_<id>_text) вместе с текстом
+# самого вопроса — нужен для автоответа (см. answer_employer_questions).
+# Подпись ищем тремя способами по убыванию надёжности: явная связка
+# label[for=id] → aria-label/aria-labelledby → текст ближайшего контейнера.
+# Если разметка hh.ru не совпадёт ни с одним из них, label останется пустым
+# и вызывающий код честно откажется от автоответа (см. answer_employer_questions).
+_COLLECT_TASK_FIELDS_JS = """
+() => {
+  const out = [];
+  document.querySelectorAll('textarea[name^="task_"]').forEach((el, i) => {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const visible = r.width > 1 && r.height > 1 &&
+                    cs.visibility !== 'hidden' && cs.display !== 'none';
+    let label = '';
+    if (el.id) {
+      const lbl = document.querySelector(`label[for="${el.id}"]`);
+      if (lbl) label = lbl.textContent.trim();
+    }
+    if (!label) {
+      label = el.getAttribute('aria-label') || '';
+      const by = el.getAttribute('aria-labelledby');
+      if (!label && by) {
+        const ref = document.getElementById(by);
+        if (ref) label = ref.textContent.trim();
+      }
+    }
+    if (!label) {
+      const container = el.closest('[data-qa*="task"], [data-qa*="question"]') || el.parentElement;
+      if (container) {
+        const clone = container.cloneNode(true);
+        clone.querySelectorAll('textarea, script, style').forEach(n => n.remove());
+        label = clone.textContent.replace(/\\s+/g, ' ').trim();
+      }
+    }
+    out.push({
+      index: i, name: el.getAttribute('name') || '', id: el.id || '',
+      visible, disabled: el.disabled || el.readOnly, label,
+    });
+  });
+  return out;
+}
+"""
+
+
 def _haystack(ta: dict) -> str:
     return " ".join(str(ta.get(k, "")) for k in
                     ("qa", "name", "id", "placeholder", "aria", "ctx")).lower()
@@ -192,6 +239,58 @@ async def find_letter_field(page, verbose: bool = False):
         return page.locator("textarea").nth(ta["index"])
 
     return None
+
+
+async def answer_employer_questions(page, vacancy_title: str, vacancy_description: str,
+                                     *, verbose: bool = False) -> bool:
+    """Пытается ответить на текстовые вопросы теста работодателя (task_<id>_text)
+    через ИИ и вписать ответы в форму.
+
+    True  — вопросов нет (или все успешно отвечены и вписаны): вызывающий код
+            продолжает обычный флоу (письмо, отправка).
+    False — хотя бы один вопрос не удалось обработать (нет подписи, ИИ вернул
+            NO_DATA, сбой модели, поле не приняло текст): вызывающий код
+            должен целиком откатиться на сценарий «тест — вручную», БЕЗ
+            частичного заполнения — hh.ru вряд ли примет форму с частью
+            обязательных полей теста пустыми, а частичный автоответ рядом с
+            пустыми полями хуже, чем честно отдать вакансию человеку целиком.
+    """
+    fields = await page.evaluate(_COLLECT_TASK_FIELDS_JS)
+    usable = [f for f in fields if f["visible"] and not f["disabled"]]
+    if not usable:
+        if verbose:
+            print("   поля теста в DOM есть, но ни одно не видимо/доступно")
+        return False
+
+    answers: dict[int, str] = {}
+    for f in usable:
+        if not f["label"]:
+            if verbose:
+                print(f"   не нашёл подпись вопроса (name={f['name']!r})")
+            return False
+        try:
+            answer = await answer_employer_question(
+                vacancy_title, vacancy_description, f["label"])
+        except ProviderError as e:
+            print(f"⚠️ Не удалось получить ответ на вопрос теста: {e}")
+            applog.exc()
+            return False
+        if answer.strip().upper() == NO_DATA_SENTINEL:
+            if verbose:
+                print(f"   недостаточно данных для ответа: {f['label'][:80]!r}")
+            return False
+        answers[f["index"]] = answer
+
+    # Вписываем только после того, как ВСЕ вопросы получили ответ — так
+    # неудача на последнем вопросе не оставляет форму в наполовину
+    # заполненном состоянии перед откатом на «вручную».
+    for index, answer in answers.items():
+        field = page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').nth(index)
+        if not await fill_letter(field, answer):
+            if verbose:
+                print(f"   не удалось вписать ответ в поле #{index}")
+            return False
+    return True
 
 
 # Кнопка отправки отклика. Ищем так же, как поле письма: осматриваем
@@ -929,22 +1028,28 @@ class HHClient:
                                     # Шаг 0.5: тест работодателя. Его поля называются
                                     # task_<id>_text и стоят в форме ПЕРЕД полем письма,
                                     # поэтому письмо уходило в ответ на первый вопрос
-                                    # теста, а отклик не создавался вовсе. Тест должен
-                                    # проходить человек — отдаём вакансию ему.
+                                    # теста, а отклик не создавался вовсе. Сначала пробуем
+                                    # ответить автоматически (только текстовые вопросы) —
+                                    # см. answer_employer_questions; если не вышло, тест
+                                    # по-прежнему уходит человеку целиком, как раньше.
                                     if await page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').count() > 0:
-                                        self.stats.bump("needs_manual")
-                                        database.add_applied_job(job_id, title, href)
-                                        print(f"📝 Вакансия с тестом работодателя, нужен ручной отклик: "
-                                              f"{title} — {href}")
-                                        import html as _html
-                                        await send_notification_func(
-                                            f"📝 <b>Тестовое задание</b>: <a href='{href}'>{title}</a>\n\n"
-                                            f"<i>Работодатель просит ответить на вопросы — откликнитесь "
-                                            f"вручную.</i>\n\n"
-                                            f"Сопроводительное письмо уже готово:\n\n"
-                                            f"<i>{_html.escape(cover_letter)}</i>",
-                                            kind="applied")
-                                        raise SkipVacancy("employer_test")
+                                        if await answer_employer_questions(page, title, description):
+                                            self.stats.bump("questions_answered")
+                                            print(f"📝 Тест работодателя пройден автоматически: {title}")
+                                        else:
+                                            self.stats.bump("needs_manual")
+                                            database.add_applied_job(job_id, title, href)
+                                            print(f"📝 Вакансия с тестом работодателя, нужен ручной отклик: "
+                                                  f"{title} — {href}")
+                                            import html as _html
+                                            await send_notification_func(
+                                                f"📝 <b>Тестовое задание</b>: <a href='{href}'>{title}</a>\n\n"
+                                                f"<i>Работодатель просит ответить на вопросы — откликнитесь "
+                                                f"вручную.</i>\n\n"
+                                                f"Сопроводительное письмо уже готово:\n\n"
+                                                f"<i>{_html.escape(cover_letter)}</i>",
+                                                kind="applied")
+                                            raise SkipVacancy("employer_test")
 
                                     # Шаг 1-2: находим поле письма (при необходимости раскрыв его)
                                     # и убеждаемся, что текст реально в него попал.

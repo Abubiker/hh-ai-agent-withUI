@@ -14,6 +14,7 @@ class Stats:
     applied_no_letter: int = 0  # из них ушедших без сопроводительного
     skipped_no_letter: int = 0  # подходили, но письмо приложить не удалось
     needs_manual: int = 0       # тест работодателя — отклик только вручную
+    questions_answered: int = 0 # тест работодателя пройден автоматически (ИИ ответил на все вопросы)
     already: int = 0        # вакансия уже была с откликом (кнопки отклика нет)
     apply_failed: int = 0   # подходила, но откликнуться не удалось
     skipped_page: int = 0   # страница не открылась: архив, редирект, капча
@@ -56,7 +57,9 @@ class Stats:
             + (f"• ⚠️ Пропущено — не вышло приложить письмо: {d('skipped_no_letter')}\n"
                if d('skipped_no_letter') else "")
             + (f"• 📝 Тест работодателя — откликнуться вручную: {d('needs_manual')}\n"
-               if d('needs_manual') else "") +
+               if d('needs_manual') else "")
+            + (f"• 🤖 Тест работодателя пройден автоматически: {d('questions_answered')}\n"
+               if d('questions_answered') else "") +
             f"• Уже был отклик (пропущено): {d('already')}\n"
             f"• Страница не открылась (архив/капча): {d('skipped_page')}\n"
             f"• ⚠️ Не удалось откликнуться: {d('apply_failed')}"

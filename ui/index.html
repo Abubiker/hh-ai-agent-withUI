@@ -195,6 +195,30 @@
           </div>
 
           <div class="card">
+            <div class="card-title">Анкетные данные для теста работодателя</div>
+            <div class="hint">Используются, когда ИИ отвечает на текстовые вопросы теста работодателя автоматически. Пустое поле — ИИ честно скажет «не знаю», и вакансия уйдёт на ручной отклик, как раньше.</div>
+            <label class="field">
+              <span class="field-label">Ожидания по зарплате</span>
+              <input type="text" id="screeningSalary" placeholder="например: от 150 000 руб. на руки">
+            </label>
+            <label class="field">
+              <span class="field-label">Готовность приступить к работе</span>
+              <input type="text" id="screeningAvailability" placeholder="например: готов сразу / через 2 недели">
+            </label>
+            <label class="field">
+              <span class="field-label">Формат работы</span>
+              <input type="text" id="screeningWorkFormat" placeholder="например: удалённо / гибрид 2 дня в офисе">
+            </label>
+            <div class="hairline"></div>
+            <div class="switch-row">
+              <div id="screeningRelocationSwitch" class="switch"><div class="knob"></div></div>
+              <div class="text">
+                <div class="t">Готов к переезду</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-title">Стиль сопроводительного</div>
             <div id="letterStyles"></div>
             <div class="hint">Действует один стиль — выбирайте, каким агент будет писать письма.</div>

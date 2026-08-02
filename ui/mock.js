@@ -29,6 +29,7 @@
       // настоящие места работы сюда попадать не должны.
       summary: "Middle QA Engineer с коммерческим опытом более 3 лет в продуктовой и заказной разработке.\n\nСейчас работаю в продуктовой команде: тестирую web и API, отвечаю за релизы и разбор инцидентов на проде.\n\nСтек: JavaScript, Playwright, Postman, Git, Docker, PostgreSQL, REST, SOAP, XML.",
     },
+    screening: { salary_expectation: "", relocation_ready: false, availability: "", work_format: "" },
     llm: {
       provider: "ollama",
       ollama_url: "http://localhost:11434",

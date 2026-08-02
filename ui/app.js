@@ -53,6 +53,10 @@ async function loadSettings() {
   $("resumeName").value = s.resume.target_name || "";
   $("resumeSummary").value = s.resume.summary || "";
   updateSummaryCount();
+  $("screeningSalary").value = s.screening?.salary_expectation || "";
+  $("screeningAvailability").value = s.screening?.availability || "";
+  $("screeningWorkFormat").value = s.screening?.work_format || "";
+  setSwitch("screeningRelocationSwitch", !!s.screening?.relocation_ready);
   await renderLetterStyles();
   setSwitch("letterReviewSwitch", s.letters.review_enabled !== false);
 
@@ -120,6 +124,12 @@ function collect() {
   const regions = state._regions || [];
   return {
     resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
+    screening: {
+      salary_expectation: $("screeningSalary").value.trim(),
+      availability: $("screeningAvailability").value.trim(),
+      work_format: $("screeningWorkFormat").value.trim(),
+      relocation_ready: hasClass("screeningRelocationSwitch", "on"),
+    },
     letters: { style: activeLetterStyle(), review_enabled: hasClass("letterReviewSwitch", "on") },
     search: {
       queries: state._queries || [],
@@ -252,6 +262,12 @@ function frSnapshot() {
   // см. scheduleTempoSave().
   return JSON.stringify({
     resume: { target_name: $("resumeName").value.trim(), summary: $("resumeSummary").value },
+    screening: {
+      salary_expectation: $("screeningSalary").value.trim(),
+      availability: $("screeningAvailability").value.trim(),
+      work_format: $("screeningWorkFormat").value.trim(),
+      relocation_ready: hasClass("screeningRelocationSwitch", "on"),
+    },
     style: activeLetterStyle(),
     reviewEnabled: hasClass("letterReviewSwitch", "on"),
     queries: state._queries || [],
@@ -1141,6 +1157,7 @@ wireSwitch("keychainSwitch");
 wireSwitch("titleOnlySwitch", () => updateQueriesInfo(), { noAutosave: true });
 wireSwitch("requireLetterSwitch", null, { noAutosave: true });
 wireSwitch("letterReviewSwitch", null, { noAutosave: true });
+wireSwitch("screeningRelocationSwitch", null, { noAutosave: true });
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».
 // Функция была написана, но не вызвана — кнопки +/− не работали вовсе.

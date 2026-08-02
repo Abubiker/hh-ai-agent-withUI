@@ -20,6 +20,7 @@ from hh_client import (
     TEST_FIELD_PREFIX, MAX_RESPONSE_ATTEMPTS,
     handle_vpn_check, diagnose_page, open_letter_field, fill_letter,
     find_submit_button, response_confirmed, attach_letter_after,
+    answer_employer_questions,
 )
 
 VACANCY_URL_RE = re.compile(
@@ -271,13 +272,16 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
         except Exception:
             pass  # необязательный шаг — единственное резюме и так выбрано
 
-        # Тест работодателя — его должен пройти человек, как в основном цикле.
+        # Тест работодателя — сначала пробуем ответить автоматически (только
+        # текстовые вопросы, см. answer_employer_questions); не вышло — как
+        # в основном цикле, тест должен пройти человек.
         if await page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').count() > 0:
-            database.add_applied_job(job_id, title, url)
-            raise QuickApplyError(
-                f"У вакансии «{title}» есть тест работодателя — на него нужно ответить "
-                f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически. "
-                f"Сопроводительное письмо уже готово:\n\n⟦letter⟧{cover_letter}⟦/letter⟧")
+            if not await answer_employer_questions(page, title, description):
+                database.add_applied_job(job_id, title, url)
+                raise QuickApplyError(
+                    f"У вакансии «{title}» есть тест работодателя — на него нужно ответить "
+                    f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически. "
+                    f"Сопроводительное письмо уже готово:\n\n⟦letter⟧{cover_letter}⟦/letter⟧")
 
         letter_sent = False
         letter_field = await open_letter_field(page)

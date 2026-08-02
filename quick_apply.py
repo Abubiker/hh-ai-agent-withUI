@@ -277,7 +277,7 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             raise QuickApplyError(
                 f"У вакансии «{title}» есть тест работодателя — на него нужно ответить "
                 f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически. "
-                f"Сопроводительное письмо уже готово:\n\n{cover_letter}")
+                f"Сопроводительное письмо уже готово:\n\n⟦letter⟧{cover_letter}⟦/letter⟧")
 
         letter_sent = False
         letter_field = await open_letter_field(page)
@@ -288,7 +288,7 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             database.add_applied_job(job_id, title, url)
             raise QuickApplyError(
                 f"Не удалось приложить сопроводительное к «{title}» — отклик не отправлен. "
-                f"Письмо уже готово, можно откликнуться вручную:\n\n{cover_letter}")
+                f"Письмо уже готово, можно откликнуться вручную:\n\n⟦letter⟧{cover_letter}⟦/letter⟧")
 
         status("Проверяю отклик…")
         submit_btn = await find_submit_button(page)
@@ -320,7 +320,8 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
         database.add_applied_job(job_id, title, url, style=letter_style if letter_sent else None)
         if letter_sent:
             return ApplyResult(
-                f"Готово — откликнулась на «{title}» с сопроводительным письмом:\n\n{cover_letter}",
+                f"Готово — откликнулась на «{title}» с сопроводительным письмом:\n\n"
+                f"⟦letter⟧{cover_letter}⟦/letter⟧",
                 applied=True)
         return ApplyResult(
             f"Готово — откликнулась на «{title}», но без письма ({site['host']} не дал его приложить).",

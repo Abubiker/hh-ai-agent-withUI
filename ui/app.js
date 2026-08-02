@@ -1207,6 +1207,36 @@ $("btnOpenLogsFolder").onclick = () => api().open_logs_folder();
 state.chatSending = false;
 let pendingChatImage = null;   // data URL прикреплённого скриншота или null
 
+// ⟦letter⟧...⟦/letter⟧ оборачивает quick_apply.py вокруг сгенерированного
+// сопроводительного письма (см. quick_apply.py) — клик по нему копирует текст.
+const CHAT_LETTER_RE = /⟦letter⟧([\s\S]*?)⟦\/letter⟧/g;
+const CHAT_URL_RE = /https?:\/\/\S+/g;
+
+function formatChatText(text) {
+  if (!text) return "";
+  // "\u0001<index>\u0002" — управляющие символы как маркер места вставки;
+  // они не встречаются в обычном тексте, поэтому не путаются с числами/суммами.
+  const placeholders = [];
+  const stash = html => {
+    const token = "\u0001" + placeholders.length + "\u0002";
+    placeholders.push(html);
+    return token;
+  };
+
+  let working = text.replace(CHAT_LETTER_RE, (_, letter) =>
+    stash(`<span class="letter-copy" data-copy="${esc(letter)}">${esc(letter).replace(/\n/g, "<br>")}</span>`));
+
+  working = working.replace(CHAT_URL_RE, url => {
+    // Не захватываем пунктуацию на конце ссылки (точку/запятую/скобку после URL).
+    const m = url.match(/^(.*?)([).,;:!?]*)$/);
+    const clean = m[1], trail = m[2];
+    return stash(`<a href="#" class="chat-link" data-url="${esc(clean)}">${esc(clean)}</a>`) + trail;
+  });
+
+  return esc(working).replace(/\n/g, "<br>")
+    .replace(/\u0001(\d+)\u0002/g, (_, i) => placeholders[Number(i)]);
+}
+
 function renderChatBubble(role, text, opts = {}) {
   $("chatEmpty").style.display = "none";
   const box = $("chatMessages");
@@ -1214,7 +1244,7 @@ function renderChatBubble(role, text, opts = {}) {
   div.className = "chat-bubble " + role + (opts.error ? " error" : "");
   const img = opts.image ? `<img class="chat-bubble-img" src="${esc(opts.image)}" alt="">` : "";
   // Картинка без подписи — пустой .text не рисуем, иначе пузырь просит место зря.
-  const body = text ? `<div class="text">${esc(text).replace(/\n/g, "<br>")}</div>` : "";
+  const body = text ? `<div class="text">${formatChatText(text)}</div>` : "";
   const retry = opts.error
     ? `<button class="chat-retry" id="chatRetryBtn">Повторить</button>` : "";
   div.innerHTML = img + body + retry;
@@ -1232,6 +1262,21 @@ function renderChatHistory(turns) {
     renderChatBubble(t.role === "assistant" ? "assistant" : "user", t.text, { image: t.image });
   }
 }
+
+$("chatMessages").addEventListener("click", async e => {
+  const link = e.target.closest(".chat-link");
+  if (link) {
+    e.preventDefault();
+    await api().open_url(link.dataset.url);
+    return;
+  }
+  const letter = e.target.closest(".letter-copy");
+  if (letter) {
+    await api().copy_to_clipboard(letter.dataset.copy);
+    letter.classList.add("copied");
+    setTimeout(() => letter.classList.remove("copied"), 1200);
+  }
+});
 
 function readImageFile(file) {
   if (!file || !file.type || !file.type.startsWith("image/")) return;

@@ -415,6 +415,12 @@ header.titlebar > * { -webkit-app-region: no-drag; }
   border-radius: 50%; border: none; background: var(--surf2); color: var(--dim); cursor: pointer; }
 .chat-attach-remove:hover { background: var(--line); color: var(--text); }
 .chat-bubble-img { display: block; max-width: 220px; border-radius: 8px; margin-bottom: 6px; }
+.chat-link { color: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.letter-copy { display: inline; cursor: pointer; border-radius: 6px; padding: 1px 3px; margin: -1px -3px;
+  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent); transition: background-color .15s, border-color .15s; }
+.letter-copy:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.letter-copy.copied { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.letter-copy.copied::after { content: "Скопировано"; margin-left: 6px; font-size: 11px; color: var(--ok); }
 
 /* ---------- пустое состояние ---------- */
 .empty-tip { padding: 14px 16px; border-radius: var(--radius-inner); background: var(--surf2); display: flex; flex-direction: column; gap: 4px; margin-top: auto; }

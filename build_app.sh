@@ -65,7 +65,7 @@ echo
 echo "✅ Готово"
 echo "   Приложение: $APP"
 echo "   Установщик: $DMG ($(du -sh "$DMG" | cut -f1))"
-[ -f "$SRC" ] && echo "   Для Linux:  папка «$LINUXDIR» ($(du -sh "$LINUXDIR" | cut -f1)) — передавать целиком"
+[ -f "$SRC" ] && echo "   Для Linux:  папка «${LINUXDIR}» ($(du -sh "$LINUXDIR" | cut -f1)) — передавать целиком"
 echo
 echo "   Устанавливать нужно ИМЕННО из $DMG"
 echo
@@ -76,4 +76,4 @@ echo "не обходит — нужно Системные настройки �
 echo "безопасность → «Открыть всё равно». Запасной вариант:"
 echo "   xattr -dr com.apple.quarantine \"/Applications/AbuHH.app\""
 echo
-echo "Сборка только под Apple Silicon. Для Linux передавайте папку «$LINUXDIR»."
+echo "Сборка только под Apple Silicon. Для Linux передавайте папку «${LINUXDIR}»."

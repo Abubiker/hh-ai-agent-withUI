@@ -3,3 +3,4 @@
 -r requirements.txt
 pytest
 pytest-asyncio
+numpy  # только для make_icon.py — вырезает буквы логотипа по цвету

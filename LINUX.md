@@ -1,4 +1,4 @@
-# HH Agent на Linux
+# AbuHH на Linux
 
 Готовой сборки под Linux нет — есть только `.dmg` под macOS. Запускать нужно
 из исходников: приложение на Python, никакой компиляции, но пакеты придётся
@@ -43,13 +43,13 @@ sudo pacman -S --needed python python-pip qt6-webengine xcb-util-cursor wl-clipb
 
 ## 2. Распаковать код и поставить зависимости
 
-Оконная версия живёт в ветке, которой нет на GitHub, — код передаётся
-архивом `hh-agent-src.tar.gz` (тем же способом, что и DMG: Телеграм, облако,
-флешка).
+Код лежит в репозитории на GitHub; для Linux отдельно готовится архив
+`abuhh-src.tar.gz` (в Releases, рядом с `.dmg`) — не нужно клонировать
+репозиторий и разбираться с git, просто скачать и распаковать.
 
 ```bash
-mkdir -p ~/hh-ai-agent && tar -xzf hh-agent-src.tar.gz -C ~/hh-ai-agent
-cd ~/hh-ai-agent
+mkdir -p ~/abuhh && tar -xzf abuhh-src.tar.gz -C ~/abuhh
+cd ~/abuhh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
@@ -93,7 +93,7 @@ ollama pull gemma4:e4b-it-qat
 Чтобы не набирать путь каждый раз:
 
 ```bash
-echo 'alias hhagent="cd ~/hh-ai-agent && .venv/bin/python ui_app.py"' >> ~/.bashrc
+echo 'alias abuhh="cd ~/abuhh && .venv/bin/python ui_app.py"' >> ~/.bashrc
 ```
 
 **Без окна вообще.** Если графика не нужна — по ssh, на сервере — всё
@@ -164,7 +164,7 @@ echo 'alias hhagent="cd ~/hh-ai-agent && .venv/bin/python ui_app.py"' >> ~/.bash
 | Окно | системный WebKit | Qt WebEngine |
 | Уведомления | нужна подпись приложения | работают через D-Bus, подпись не нужна |
 | Иконка в трее | есть | зависит от окружения; в GNOME нужен `gnome-shell-extension-appindicator`, без него окно просто работает без иконки |
-| Настройки | `~/Library/Application Support/HHAgent` | `~/.config/HHAgent` |
+| Настройки | `~/Library/Application Support/AbuHH` | `~/.config/AbuHH` |
 
 Уведомления на Linux даже проще: macOS показывает их только от подписанного
 приложения, а здесь такого требования нет.
@@ -183,7 +183,7 @@ echo 'alias hhagent="cd ~/hh-ai-agent && .venv/bin/python ui_app.py"' >> ~/.bash
 | Уведомления не приходят | нужна сессия рабочего стола; по ssh их не будет, приложение об этом честно пишет при запуске |
 | Агент нашёл 0 вакансий | слишком узкие запросы или регион — расширьте на вкладке «Поиск» |
 | Отклики уходят без письма | не заполнен «Профиль для писем» |
-| Хочется начать с чистого листа | удалите `~/.config/HHAgent` — настройки сбросятся к заводским |
+| Хочется начать с чистого листа | удалите `~/.config/AbuHH` — настройки сбросятся к заводским |
 
 ## Что проверено
 

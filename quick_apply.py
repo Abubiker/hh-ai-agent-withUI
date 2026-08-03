@@ -210,6 +210,10 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             if not solution:
                 raise QuickApplyError("Капча не решена — отклик не отправлен.")
 
+            # submit_captcha_solution — общая с основным циклом (см. hh_client.py),
+            # с его же неторопливыми "человечными" паузами. Без статуса на время
+            # шага пользователь молча ждёт дольше, чем раньше, без объяснения.
+            status("Отправляю решение капчи…")
             await submit_captcha_solution(page, solution)
 
         # Пока решали капчу, вакансию могли обработать другим путём.

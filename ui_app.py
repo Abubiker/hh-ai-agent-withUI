@@ -19,7 +19,6 @@ import re
 import socket
 import sys
 import threading
-import traceback
 from pathlib import Path
 
 # ВАЖНО: до любого импорта playwright. В собранном .app он по умолчанию ищет
@@ -564,7 +563,11 @@ class AgentBridge:
         except Exception as e:
             msg = f"Не удалось загрузить модуль агента: {type(e).__name__}: {e}"
             self._log(msg, "error")
-            self._log(traceback.format_exc(), "error")
+            # applog.exc(), не self._log(traceback...) — тот идёт через
+            # applog.log(), который режет строку до 300 симв. (см. applog.py:
+            # MAX_LOGGED_LINE) — полная трассировка при падении на старте
+            # обрезалась бы в файле, который и пересылают для разбора.
+            applog.exc()
             return {"ok": False, "error": msg}
 
         control.configure(int(session_minutes) * 60 or None)
@@ -639,8 +642,9 @@ class AgentBridge:
                     self._emit("pause", {"seconds": pause * 60})
                     await control.sleep_or_stop(pause * 60)
                     self._emit("pause", None)
-            except Exception:
-                self._log(traceback.format_exc(), "error")
+            except Exception as e:
+                self._log(f"Ошибка в работе агента: {type(e).__name__}: {e}", "error")
+                applog.exc()
             finally:
                 if client:
                     self._emit("stats", client.stats.__dict__)

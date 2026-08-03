@@ -1275,28 +1275,39 @@ class HHClient:
             chat_link = await title_loc.get_attribute("href")
             if chat_link:
                 chat_page = await hh_session.new_stealth_page(self.context)
-                await chat_page.goto(f"{base}{chat_link}", wait_until="domcontentloaded")
-                await asyncio.sleep(3)
+                try:
+                    await chat_page.goto(f"{base}{chat_link}", wait_until="domcontentloaded")
+                    await asyncio.sleep(3)
 
-                # Получаем последнее сообщение
-                messages = await chat_page.locator('div[data-qa="chat-message-text"]').all()
-                if messages:
-                    last_msg = await messages[-1].inner_text()
-                    # Хеш ТЕКСТА последнего сообщения, а не его позиции в списке:
-                    # id вида f"{chat_link}_{len(messages)}" ломался, если число
-                    # сообщений менялось не так, как ожидалось (истории переписки
-                    # на hh.ru может подрезаться подгрузкой) — реальное новое
-                    # сообщение получало id уже виденного и терялось молча.
-                    msg_id = f"{chat_link}_{hashlib.sha256(last_msg.encode('utf-8')).hexdigest()[:16]}"
+                    # Получаем последнее сообщение
+                    messages = await chat_page.locator('div[data-qa="chat-message-text"]').all()
+                    if messages:
+                        last_msg = await messages[-1].inner_text()
+                        # Хеш ТЕКСТА последнего сообщения — не только позиции: id
+                        # вида f"{chat_link}_{len(messages)}" ломался, если число
+                        # сообщений менялось не так, как ожидалось (история на
+                        # hh.ru может подрезаться подгрузкой). Но и чистый хеш без
+                        # счётчика даёт свой сбой: один и тот же текст от
+                        # работодателя дважды подряд («Ок», «Ждём») получает
+                        # одинаковый id и второе уведомление молча теряется.
+                        # Счётчик + хеш вместе: расхождение счётчика при подрезке
+                        # истории даст лишнее повторное уведомление (терпимо),
+                        # а не потерянное сообщение (не терпимо) — та же
+                        # асимметрия, ради которой хеш добавляли изначально.
+                        msg_id = (f"{chat_link}_{len(messages)}_"
+                                  f"{hashlib.sha256(last_msg.encode('utf-8')).hexdigest()[:16]}")
 
-                    if not database.is_message_processed(msg_id):
-                        database.add_processed_message(msg_id, chat_link, last_msg)
-                        await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='{base}{chat_link}'>Перейти к чату</a>", kind="reply")
-
-                await chat_page.close()
+                        if not database.is_message_processed(msg_id):
+                            database.add_processed_message(msg_id, chat_link, last_msg)
+                            await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='{base}{chat_link}'>Перейти к чату</a>", kind="reply")
+                finally:
+                    await chat_page.close()
 
     async def stop(self):
+        # safe_close — тот же класс защиты, что и при запуске (см.
+        # hh_session.BROWSER_LAUNCH_TIMEOUT): если браузер уже завис, само
+        # закрытие может зависнуть так же, без таймаута на cleanup.
         if self.browser:
-            await self.browser.close()
+            await hh_session.safe_close(self.browser.close(), "браузер")
         if self.playwright:
-            await self.playwright.stop()
+            await hh_session.safe_close(self.playwright.stop(), "playwright")

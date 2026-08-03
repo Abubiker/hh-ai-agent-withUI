@@ -37,6 +37,23 @@ class SessionError(RuntimeError):
 BROWSER_LAUNCH_TIMEOUT = 60.0
 CONTEXT_OPEN_TIMEOUT = 30.0
 
+# Cleanup (close/stop) — тот же протокольный вызов без встроенного таймаута,
+# что и запуск. Если браузер уже завис (типичная причина, по которой мы
+# вообще попали в except/finally), закрытие может зависнуть точно так же —
+# без защиты сам cleanup стал бы новым источником зависания.
+CLEANUP_TIMEOUT = 10.0
+
+
+async def safe_close(coro, what: str):
+    """Оборачивает close()/stop() таймаутом и не даёт исключению из cleanup
+    уронить обработку исходной ошибки — логируем и идём дальше."""
+    try:
+        await asyncio.wait_for(coro, timeout=CLEANUP_TIMEOUT)
+    except Exception as e:
+        import applog
+        print(f"⚠️ Не удалось закрыть {what}: {e}")
+        applog.exc()
+
 
 async def open_session(site: dict | None = None, *, headless: bool = True,
                         require_login: bool = True):
@@ -70,8 +87,8 @@ async def open_session(site: dict | None = None, *, headless: bool = True,
                                           timeout=CONTEXT_OPEN_TIMEOUT)
     except asyncio.TimeoutError:
         if browser is not None:
-            await browser.close()
-        await playwright.stop()
+            await safe_close(browser.close(), "браузер")
+        await safe_close(playwright.stop(), "playwright")
         raise SessionError("Браузер не запустился за отведённое время. "
                             "Попробуйте перезапустить агента.")
     return playwright, browser, context
@@ -88,9 +105,9 @@ async def one_shot(site: dict | None = None, *, headless: bool = True,
     try:
         yield context
     finally:
-        await context.close()
-        await browser.close()
-        await playwright.stop()
+        await safe_close(context.close(), "контекст")
+        await safe_close(browser.close(), "браузер")
+        await safe_close(playwright.stop(), "playwright")
 
 
 async def new_stealth_page(context):

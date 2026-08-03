@@ -104,9 +104,20 @@ def init_db():
     # У новой базы 0 по умолчанию — вся цепочка миграций накатывается разом.
     current = cursor.execute("PRAGMA user_version").fetchone()[0]
     for version in range(current + 1, SCHEMA_VERSION + 1):
-        MIGRATIONS[version](cursor)
-        cursor.execute(f"PRAGMA user_version = {version}")
-    conn.commit()
+        # Явный BEGIN: без него DDL/PRAGMA в модуле sqlite3 коммитятся сразу
+        # по выполнении (autocommit), и крах между последним шагом миграции
+        # и записью версии не откатывался бы — следующий init_db() рестартовал
+        # бы неидемпотентную миграцию заново. SQLite поддерживает транзакционный
+        # DDL (включая PRAGMA user_version) — оборачиваем миграцию и бамп
+        # версии одной транзакцией: либо применилось всё, либо ничего.
+        cursor.execute("BEGIN")
+        try:
+            MIGRATIONS[version](cursor)
+            cursor.execute(f"PRAGMA user_version = {version}")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     conn.close()
 
 def load_applied_jobs(limit: int = 200) -> list[dict]:

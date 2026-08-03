@@ -160,6 +160,9 @@ async def test_complete_with_retry_honors_retry_after(monkeypatch, no_sleep):
 
 
 async def test_complete_with_retry_retry_after_capped(monkeypatch, no_sleep):
+    # complete_with_retry доверяет настоящему Retry-After больше, чем своей
+    # угадайке экспоненты — у него отдельный, более высокий потолок (120)
+    # именно для этого случая (см. retry_after_cap в _backoff_delay).
     provider = FakeProvider([
         ProviderError("429", retry_after=999), "ответ",
     ])
@@ -167,7 +170,7 @@ async def test_complete_with_retry_retry_after_capped(monkeypatch, no_sleep):
 
     await complete_with_retry("prompt", attempts=2)
 
-    assert no_sleep == [30]
+    assert no_sleep == [120]
 
 
 async def test_chat_with_retry_honors_retry_after_with_own_cap(monkeypatch, no_sleep):

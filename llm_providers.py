@@ -473,20 +473,25 @@ def get_provider(name: str | None = None) -> LLMProvider:
 
 
 def _backoff_delay(attempt: int, *, base: float, cap: float,
-                   retry_after: float | None) -> float:
+                   retry_after: float | None, retry_after_cap: float | None = None) -> float:
     """Сервис сам сказал, сколько ждать (Retry-After на 429) — это точнее
     угадывания и вежливее по отношению к чужому лимиту. Без него —
     экспоненциальный рост (base, base*2, base*4, ...), а не одна и та же
     пауза на каждой попытке: наивный фиксированный sleep бьёт по тому же
     лимиту с той же частотой и не даёт ему восстановиться. cap — чтобы
-    сломанный сервис с огромным Retry-After не подвесил агента на часы."""
+    сломанный сервис с огромным Retry-After не подвесил агента на часы.
+
+    retry_after_cap — отдельный, обычно более высокий потолок именно для
+    настоящего Retry-After (сервер сказал реальное число — ему стоит
+    доверять больше, чем собственной угадайке экспоненты). None — вести
+    себя как раньше, единый cap на оба случая."""
     if retry_after is not None:
-        return min(retry_after, cap)
+        return min(retry_after, retry_after_cap if retry_after_cap is not None else cap)
     return min(base * (2 ** (attempt - 1)), cap)
 
 
 async def complete_with_retry(prompt: str, *, deterministic: bool = False,
-                              timeout: int = 120, attempts: int = 2) -> str:
+                              timeout: int = 120, attempts: int = 3) -> str:
     """Запрос с повтором. Если все попытки провалились — бросает ProviderError.
 
     Важно: раньше сбой связи возвращал False и был неотличим от честного
@@ -511,7 +516,8 @@ async def complete_with_retry(prompt: str, *, deterministic: bool = False,
             print(f"Ошибка обращения к модели, попытка {attempt}/{attempts}: {e}")
             if attempt < attempts:
                 await asyncio.sleep(_backoff_delay(attempt, base=5, cap=30,
-                                                   retry_after=e.retry_after))
+                                                   retry_after=e.retry_after,
+                                                   retry_after_cap=120))
     raise ProviderError(f"Модель не ответила после {attempts} попыток: {last}")
 
 

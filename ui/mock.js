@@ -130,6 +130,13 @@
         return ok({ path: "~/Library/Application Support/AbuHH/settings.json" });
       },
       get_state: () => Promise.resolve({ running: false, stats: notReady ? Object.fromEntries(Object.keys(stats).map(k => [k, 0])) : stats }),
+      get_applied_jobs: (limit = 200) => Promise.resolve({
+        ok: true,
+        jobs: [
+          { id: "1", title: "Fullstack QA-инженер (Java/Python)", url: "https://hh.ru/vacancy/1", applied_at: new Date().toISOString() },
+          { id: "2", title: "Тестировщик", url: "https://hh.ru/vacancy/2", applied_at: new Date(Date.now() - 86400000).toISOString() },
+        ],
+      }),
       setup_status: () => Promise.resolve(setup),
       get_sites: () => Promise.resolve({ sites: SITES, active: settings.site.active }),
       set_active_site: (id) => { settings.site.active = id; setup.site = id; return ok(); },

@@ -1241,7 +1241,27 @@ class HHClient:
                     next_btn = self.page.locator('a[data-qa="pager-next"]')
                     if await next_btn.count() > 0 and await next_btn.is_visible():
                         print("➡️ Перехожу на следующую страницу...")
-                        await next_btn.click()
+                        try:
+                            try:
+                                await next_btn.click(timeout=10000)
+                            except Exception:
+                                # hh.ru держит виджет чата (chatik) поверх кнопки —
+                                # обычный клик отказывается "прожимать" перекрывающий
+                                # элемент (Playwright бьёт мимо специально, не баг).
+                                # force=True шлёт клик прямо в элемент, а не в точку
+                                # экрана, — рабочий обход именно этого перекрытия.
+                                print("   обычный клик не прошёл (что-то перекрывает "
+                                      "кнопку, вероятно виджет чата) — пробую force-клик")
+                                await next_btn.click(timeout=10000, force=True)
+                        except Exception as e:
+                            # Ни обычный, ни force-клик — не падаем всем циклом
+                            # (раньше это гробило остаток прохода по всем
+                            # оставшимся запросам/регионам), просто обрываем
+                            # пагинацию именно этого запроса и идём дальше.
+                            print(f"⚠️ Не удалось перейти на страницу {page_num + 1}: {e} "
+                                  f"— останавливаю пагинацию по этому запросу.")
+                            applog.exc()
+                            break
                         await control.sleep_or_stop(4)
                         page_num += 1
                     else:

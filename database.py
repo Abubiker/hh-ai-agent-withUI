@@ -6,10 +6,14 @@ from settings import user_file
 # папка временная, и история откликов терялась бы при каждом запуске.
 DB_PATH = str(user_file("agent.db"))
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # Таблица для откликнутых вакансий
+
+def _migrate_to_1(cursor: sqlite3.Cursor):
+    """Вся схема до введения версионирования — включая колонку style,
+    раньше добавлявшуюся отдельным ALTER TABLE с ручной проверкой
+    PRAGMA table_info. У новых пользователей применяется целиком за один
+    проход; у существующих CREATE TABLE IF NOT EXISTS не трогает уже
+    имеющиеся таблицы, а ALTER здесь безопасен — до версии 1 колонки style
+    просто не бывает ни у кого, PRAGMA user_version там всегда 0."""
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS applied_jobs (
             id TEXT PRIMARY KEY,
@@ -18,14 +22,9 @@ def init_db():
             applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    # style — каким стилем было написано сопроводительное (см. ai_analyzer.
-    # LETTER_STYLES), NULL если письмо не прикладывалось. Добавлено позже
-    # исходной таблицы — ALTER TABLE, а не пересоздание: строки существующих
-    # пользователей не трогаем.
     existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(applied_jobs)")}
     if "style" not in existing_cols:
         cursor.execute("ALTER TABLE applied_jobs ADD COLUMN style TEXT")
-    # Таблица для истории сообщений чатов
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS chat_messages (
             msg_id TEXT PRIMARY KEY,
@@ -85,8 +84,49 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+
+# Версии схемы — по одной функции на шаг, каждая поднимает ровно на 1.
+# Дальнейшие изменения схемы (новая таблица, ALTER TABLE, бэкофилл) — новая
+# функция _migrate_to_N и запись здесь, а не правка предыдущих: старые
+# версии уже применены у части пользователей, их нельзя менять задним числом.
+MIGRATIONS = {
+    1: _migrate_to_1,
+}
+SCHEMA_VERSION = max(MIGRATIONS)
+
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # PRAGMA user_version — целое число, встроенное в заголовок файла sqlite;
+    # отдельная таблица версий не нужна и не мешает будущим SELECT *.
+    # У новой базы 0 по умолчанию — вся цепочка миграций накатывается разом.
+    current = cursor.execute("PRAGMA user_version").fetchone()[0]
+    for version in range(current + 1, SCHEMA_VERSION + 1):
+        MIGRATIONS[version](cursor)
+        cursor.execute(f"PRAGMA user_version = {version}")
     conn.commit()
     conn.close()
+
+def load_applied_jobs(limit: int = 200) -> list[dict]:
+    """Последние отклики, самые свежие первыми — для истории на вкладке
+    «Статистика» (название + ссылка на вакансию).
+
+    Сортировка по applied_at DESC, rowid DESC: у CURRENT_TIMESTAMP секундная
+    точность — два отклика в одну секунду иначе шли бы в произвольном
+    порядке. rowid у applied_jobs растёт по порядку вставки (id — TEXT, а не
+    INTEGER PRIMARY KEY, так что implicit rowid никуда не делся)."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, title, url, applied_at FROM applied_jobs "
+        "ORDER BY applied_at DESC, rowid DESC LIMIT ?", (limit,))
+    jobs = [{"id": row[0], "title": row[1], "url": row[2], "applied_at": row[3]}
+            for row in cursor.fetchall()]
+    conn.close()
+    return jobs
+
 
 def is_job_applied(job_id: str) -> bool:
     conn = sqlite3.connect(DB_PATH)

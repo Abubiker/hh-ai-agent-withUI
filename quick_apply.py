@@ -20,7 +20,7 @@ from hh_client import (
     TEST_FIELD_PREFIX, MAX_RESPONSE_ATTEMPTS,
     handle_vpn_check, diagnose_page, open_letter_field, fill_letter,
     find_submit_button, response_confirmed, attach_letter_after,
-    answer_employer_questions,
+    answer_employer_questions, submit_captcha_solution,
 )
 
 VACANCY_URL_RE = re.compile(
@@ -210,24 +210,7 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             if not solution:
                 raise QuickApplyError("Капча не решена — отклик не отправлен.")
 
-            input_field = page.locator('input[type="text"]').first
-            if await input_field.is_visible():
-                await input_field.click()
-                await input_field.type(solution, delay=120)
-                submit_captcha = page.locator(
-                    'button[type="submit"]:visible, button:has-text("Отправить"):visible'
-                ).first
-                try:
-                    if await submit_captcha.is_visible():
-                        await submit_captcha.click()
-                    else:
-                        await input_field.press("Enter")
-                except Exception:
-                    await input_field.press("Enter")
-                await page.wait_for_timeout(4000)
-            else:
-                await page.reload()
-                await page.wait_for_timeout(3000)
+            await submit_captcha_solution(page, solution)
 
         # Пока решали капчу, вакансию могли обработать другим путём.
         if database.is_job_applied(job_id):

@@ -14,6 +14,7 @@ HHClient — долгоживущий объект (держит браузер 
 в close(). Разовым чтениям (resume_reader, quick_apply, resume_stats) удобнее
 контекст-менеджер one_shot(), закрывающий всё сам.
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -24,6 +25,17 @@ import sites as _sites
 
 class SessionError(RuntimeError):
     """Сообщение уже человекочитаемое — можно показывать пользователю как есть."""
+
+
+# AsyncNewBrowser/new_context/new_page — протокольные вызовы без параметра
+# timeout (в отличие от локаторов вроде click/fill, у которых он есть и
+# берётся из page.default_timeout). Если браузерный процесс не поднимется
+# или протокол зависнет на этом шаге, await виснет НАВСЕГДА — тот же класс
+# бага, что был у page.mouse.move/wheel (см. MOUSE_ACTION_TIMEOUT в
+# hh_client.py). Здесь это ещё чувствительнее: это самый первый шаг сеанса,
+# без него не запустится вообще ничего.
+BROWSER_LAUNCH_TIMEOUT = 60.0
+CONTEXT_OPEN_TIMEOUT = 30.0
 
 
 async def open_session(site: dict | None = None, *, headless: bool = True,
@@ -42,15 +54,26 @@ async def open_session(site: dict | None = None, *, headless: bool = True,
             "один раз, чтобы приложение запомнило вход.")
 
     playwright = await async_playwright().start()
-    # persistent_context=False — получаем обычный Playwright Browser, на
-    # котором storage_state работает как у любого другого движка.
-    from camoufox.async_api import AsyncNewBrowser
-    browser = await AsyncNewBrowser(playwright, headless=headless, humanize=True,
-                                     persistent_context=False)
-    kwargs = {}
-    if os.path.exists(state_path):
-        kwargs["storage_state"] = state_path
-    context = await browser.new_context(**kwargs)
+    browser = None
+    try:
+        # persistent_context=False — получаем обычный Playwright Browser, на
+        # котором storage_state работает как у любого другого движка.
+        from camoufox.async_api import AsyncNewBrowser
+        browser = await asyncio.wait_for(
+            AsyncNewBrowser(playwright, headless=headless, humanize=True,
+                             persistent_context=False),
+            timeout=BROWSER_LAUNCH_TIMEOUT)
+        kwargs = {}
+        if os.path.exists(state_path):
+            kwargs["storage_state"] = state_path
+        context = await asyncio.wait_for(browser.new_context(**kwargs),
+                                          timeout=CONTEXT_OPEN_TIMEOUT)
+    except asyncio.TimeoutError:
+        if browser is not None:
+            await browser.close()
+        await playwright.stop()
+        raise SessionError("Браузер не запустился за отведённое время. "
+                            "Попробуйте перезапустить агента.")
     return playwright, browser, context
 
 
@@ -74,4 +97,7 @@ async def new_stealth_page(context):
     """Имя сохранено ради обратной совместимости вызовов (hh_client.py и
     др.) — маскировка теперь встроена в сам Camoufox, отдельного шага не
     требуется."""
-    return await context.new_page()
+    try:
+        return await asyncio.wait_for(context.new_page(), timeout=CONTEXT_OPEN_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise SessionError("Не удалось открыть вкладку браузера за отведённое время.")

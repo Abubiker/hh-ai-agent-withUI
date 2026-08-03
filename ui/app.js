@@ -1501,6 +1501,10 @@ document.querySelectorAll(".nav-item").forEach(b => b.addEventListener("click", 
   document.querySelectorAll(".tab-page").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   $("tab-" + b.dataset.tab).classList.add("active");
+  // Переключение сюда не проходит через renderFunnelTab (тот триггерится
+  // событиями стата/ресайзом) — без явного вызова история откликов не
+  // подгрузилась бы при самом первом заходе на вкладку в этом запуске окна.
+  if (b.dataset.tab === "stats") loadAppliedJobs();
 }));
 
 /* ================= готовность / состояние экрана «Работа» ================= */
@@ -1601,7 +1605,51 @@ function renderFunnelTab() {
   const s = state.stats || {};
   const empty = !(s.viewed || s.hard_skipped);
   renderFunnel($("funnelCard"), s, empty);
+  // История откликов подтягивается отдельным запросом (это данные из
+  // agent.db, не часть state.stats) — только пока вкладка реально видна:
+  // событие "stats" от бэкенда прилетает на каждый шаг воронки, а не
+  // только на новый отклик, незачем дёргать БД, когда пользователь смотрит
+  // другую вкладку.
+  if ($("tab-stats").classList.contains("active")) loadAppliedJobs();
 }
+
+async function loadAppliedJobs() {
+  const r = await api().get_applied_jobs();
+  renderAppliedJobs($("appliedJobsCard"), r.ok ? r.jobs : []);
+}
+
+function fmtAppliedAt(ts) {
+  // sqlite CURRENT_TIMESTAMP — "YYYY-MM-DD HH:MM:SS" в UTC, без разделителя
+  // T и без зоны; без этого Date не парсит строку одинаково во всех движках.
+  if (!ts) return "";
+  const d = new Date(ts.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderAppliedJobs(container, jobs) {
+  if (!container) return;
+  if (!jobs || !jobs.length) {
+    container.innerHTML = `<div class="empty-tip">
+      <div class="t">Тут появится история откликов</div>
+      <div class="d">Название вакансии и ссылка на неё — на каждый отправленный отклик, самые свежие сверху.</div>
+    </div>`;
+    return;
+  }
+  container.innerHTML = jobs.map(j => `
+    <div class="job-row">
+      <a href="#" class="title job-link" data-url="${esc(j.url || "")}">${esc(j.title || "Без названия")}</a>
+      <div class="date">${esc(fmtAppliedAt(j.applied_at))}</div>
+    </div>`).join("");
+}
+
+$("appliedJobsCard").addEventListener("click", async e => {
+  const link = e.target.closest(".job-link");
+  if (link && link.dataset.url) {
+    e.preventDefault();
+    await api().open_url(link.dataset.url);
+  }
+});
 
 /* Кольцевая диаграмма воронки — по макету maket/HH Agent macOS v2.dc.html,
    экран "3a Статистика — кольцевая диаграмма воронки". Пять концентрических

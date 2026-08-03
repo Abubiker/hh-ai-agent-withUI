@@ -14,6 +14,7 @@
 import asyncio
 import json
 import time
+from email.utils import parsedate_to_datetime
 
 import aiohttp
 
@@ -22,7 +23,31 @@ from settings import settings
 
 class ProviderError(RuntimeError):
     """Модель не ответила. Осознанно не превращается в 'вакансия не подходит':
-    вызывающий код должен отложить вакансию, а не похоронить её в базе."""
+    вызывающий код должен отложить вакансию, а не похоронить её в базе.
+
+    retry_after — секунды из заголовка Retry-After ответа 429, если сервис
+    его прислал. Без этого retry бил бы по тому же лимиту снова и снова на
+    фиксированной паузе, вместо того чтобы подождать ровно столько, сколько
+    просит сам сервис."""
+
+    def __init__(self, message: str, *, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Retry-After — либо число секунд, либо HTTP-дата (RFC 7231)."""
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(value)
+        return max(0.0, (dt.timestamp() - time.time()))
+    except (TypeError, ValueError):
+        return None
 
 
 class LLMProvider:
@@ -283,7 +308,10 @@ class OpenAICompatProvider(LLMProvider):
                                         json=payload, headers=self._headers(),
                                         timeout=timeout) as r:
                     if r.status >= 400:
-                        raise ProviderError(f"HTTP {r.status}: {(await r.text())[:200]}")
+                        retry_after = (_parse_retry_after(r.headers.get("Retry-After"))
+                                      if r.status == 429 else None)
+                        raise ProviderError(f"HTTP {r.status}: {(await r.text())[:200]}",
+                                            retry_after=retry_after)
                     data = await r.json()
                     return (data["choices"][0]["message"]["content"] or "").strip()
         except ProviderError:
@@ -383,7 +411,10 @@ class AnthropicProvider(LLMProvider):
                 async with session.post(self.API, json=payload,
                                         headers=headers, timeout=timeout) as r:
                     if r.status >= 400:
-                        raise ProviderError(f"HTTP {r.status}: {(await r.text())[:200]}")
+                        retry_after = (_parse_retry_after(r.headers.get("Retry-After"))
+                                      if r.status == 429 else None)
+                        raise ProviderError(f"HTTP {r.status}: {(await r.text())[:200]}",
+                                            retry_after=retry_after)
                     data = await r.json()
                     parts = [b.get("text", "") for b in data.get("content", [])
                              if b.get("type") == "text"]
@@ -441,6 +472,19 @@ def get_provider(name: str | None = None) -> LLMProvider:
     return cls()
 
 
+def _backoff_delay(attempt: int, *, base: float, cap: float,
+                   retry_after: float | None) -> float:
+    """Сервис сам сказал, сколько ждать (Retry-After на 429) — это точнее
+    угадывания и вежливее по отношению к чужому лимиту. Без него —
+    экспоненциальный рост (base, base*2, base*4, ...), а не одна и та же
+    пауза на каждой попытке: наивный фиксированный sleep бьёт по тому же
+    лимиту с той же частотой и не даёт ему восстановиться. cap — чтобы
+    сломанный сервис с огромным Retry-After не подвесил агента на часы."""
+    if retry_after is not None:
+        return min(retry_after, cap)
+    return min(base * (2 ** (attempt - 1)), cap)
+
+
 async def complete_with_retry(prompt: str, *, deterministic: bool = False,
                               timeout: int = 120, attempts: int = 2) -> str:
     """Запрос с повтором. Если все попытки провалились — бросает ProviderError.
@@ -466,7 +510,8 @@ async def complete_with_retry(prompt: str, *, deterministic: bool = False,
             last = e
             print(f"Ошибка обращения к модели, попытка {attempt}/{attempts}: {e}")
             if attempt < attempts:
-                await asyncio.sleep(5)
+                await asyncio.sleep(_backoff_delay(attempt, base=5, cap=30,
+                                                   retry_after=e.retry_after))
     raise ProviderError(f"Модель не ответила после {attempts} попыток: {last}")
 
 
@@ -491,5 +536,6 @@ async def chat_with_retry(messages: list[dict], *, system: str | None = None,
             last = e
             print(f"Ошибка обращения к модели (чат), попытка {attempt}/{attempts}: {e}")
             if attempt < attempts:
-                await asyncio.sleep(2)
+                await asyncio.sleep(_backoff_delay(attempt, base=2, cap=15,
+                                                   retry_after=e.retry_after))
     raise ProviderError(f"Модель не ответила после {attempts} попыток: {last}")

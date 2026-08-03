@@ -5,13 +5,36 @@ from aiogram.filters import Command
 from settings import settings
 import control
 
-TG_BOT_TOKEN = settings.tg_bot_token
-TG_USER_ID = settings.tg_user_id
-
-# Бот создаётся только при наличии токена: Bot("") падает с ошибкой валидации,
-# а приложение должно спокойно запускаться и без настроенного Telegram.
-bot = Bot(token=TG_BOT_TOKEN) if TG_BOT_TOKEN else None
 dp = Dispatcher()
+
+# Кэш Bot по токену, а не module-level константа: settings.tg_bot_token
+# читается заново на каждый вызов get_bot(), как и у llm_providers.
+# get_provider(). Раньше TG_BOT_TOKEN/TG_USER_ID/bot вычислялись РОВНО ОДИН
+# РАЗ при первом импорте модуля — если пользователь настраивал Telegram
+# ПОСЛЕ этого (мастер первого запуска в main.py импортирует tg_bot до своего
+# запуска; в окне — любой более ранний вызов notify/test_notification), все
+# последующие сообщения молча уходили в «токен не задан» до перезапуска
+# приложения.
+_bot_cache: dict[str, str | Bot | None] = {"token": None, "bot": None}
+
+
+def get_bot() -> Bot | None:
+    """Бот для текущего токена из настроек. None, если токен не задан —
+    Bot("") падает с ошибкой валидации, а приложение должно спокойно
+    работать и без настроенного Telegram."""
+    token = settings.tg_bot_token
+    if not token:
+        return None
+    if _bot_cache["token"] != token:
+        _bot_cache["bot"] = Bot(token=token)
+        _bot_cache["token"] = token
+    return _bot_cache["bot"]
+
+
+def is_configured() -> bool:
+    """Есть ли токен бота — для UI (кнопка «Проверить», состояние вкладки)."""
+    return bool(settings.tg_bot_token)
+
 
 async def send_notification(text: str):
     """Отправляет уведомление пользователю."""
@@ -23,19 +46,21 @@ async def send_notification(text: str):
         print(f"[отчёт] {plain}")
         return
 
-    if not bot or not TG_USER_ID:
+    bot = get_bot()
+    user_id = settings.tg_user_id
+    if not bot or not user_id:
         print("ОШИБКА: Не настроен Telegram (нет токена или ID). Уведомление:")
         print(text)
         return
 
     try:
-        await bot.send_message(chat_id=TG_USER_ID, text=text, parse_mode="HTML")
+        await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML")
     except Exception as e:
         print(f"Ошибка при отправке сообщения в TG: {e}")
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    if str(message.from_user.id) == TG_USER_ID:
+    if str(message.from_user.id) == settings.tg_user_id:
         await message.answer("Привет! Я ваш ИИ-агент для поиска работы на HH.ru. Я буду присылать сюда уведомления.\n\nКоманды:\n/stop — остановить агента после текущей вакансии.")
     else:
         await message.answer(f"Извините, у вас нет доступа к этому боту.\nВаш ID: <code>{message.from_user.id}</code>\nУкажите его в настройках приложения (раздел «Уведомления») и перезапустите агента.")
@@ -43,7 +68,7 @@ async def cmd_start(message: Message):
 @dp.message(Command("stop"))
 async def cmd_stop(message: Message):
     """Мягкая остановка агента по команде из Telegram."""
-    if str(message.from_user.id) != TG_USER_ID:
+    if str(message.from_user.id) != settings.tg_user_id:
         return
     control.request_stop()
     await message.answer("🛑 Принял. Останавливаюсь после текущей вакансии и пришлю итоговую статистику.")
@@ -53,7 +78,9 @@ captcha_solution = ""
 
 async def send_captcha_request(filepath: str, text: str):
     """Отправляет фото капчи пользователю."""
-    if not bot or not TG_USER_ID:
+    bot = get_bot()
+    user_id = settings.tg_user_id
+    if not bot or not user_id:
         print("ОШИБКА: Не настроен Telegram. Капча сохранена в", filepath)
         return
 
@@ -61,16 +88,16 @@ async def send_captcha_request(filepath: str, text: str):
         from aiogram.types import FSInputFile
         photo = FSInputFile(filepath)
         captcha_event.clear() # Блокируем процесс
-        await bot.send_photo(chat_id=TG_USER_ID, photo=photo, caption=text, parse_mode="HTML")
+        await bot.send_photo(chat_id=user_id, photo=photo, caption=text, parse_mode="HTML")
     except Exception as e:
         print(f"Ошибка при отправке капчи в TG: {e}")
 
 @dp.message()
 async def handle_text(message: Message):
     """Принимает текст капчи от пользователя."""
-    if str(message.from_user.id) != TG_USER_ID:
+    if str(message.from_user.id) != settings.tg_user_id:
         return
-        
+
     global captcha_solution
     if not captcha_event.is_set():
         captcha_solution = message.text.strip()
@@ -86,6 +113,10 @@ async def start_bot():
     Теперь обрыв связи с Telegram лишь приводит к паузе и повторной попытке,
     а основной агент продолжает работать.
     """
+    bot = get_bot()
+    if not bot:
+        print("⚠️ Telegram включён, но токен бота не задан — бот не запущен.")
+        return
     print("Запуск Telegram-бота...")
     while True:
         try:
@@ -118,10 +149,12 @@ async def shutdown_bot(bot_task, timeout: float = 5.0):
     except Exception:
         pass
 
-    try:
-        await asyncio.wait_for(bot.session.close(), timeout=2)
-    except Exception:
-        pass
+    bot = get_bot()
+    if bot:
+        try:
+            await asyncio.wait_for(bot.session.close(), timeout=2)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

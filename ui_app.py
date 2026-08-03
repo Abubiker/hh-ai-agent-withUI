@@ -679,6 +679,14 @@ class AgentBridge:
         stats = self.client.stats.__dict__ if self.client else Stats.load().__dict__
         return {"running": self.running, "stats": stats, "started_at": self.started_at}
 
+    def get_applied_jobs(self, limit: int = 200):
+        """История откликов для вкладки «Статистика» — название и ссылка на
+        вакансию, самые свежие первыми (см. database.load_applied_jobs)."""
+        try:
+            return {"ok": True, "jobs": database.load_applied_jobs(limit)}
+        except Exception as e:
+            return {"ok": False, "jobs": [], "error": str(e)}
+
     # ---------- мастер первого запуска ----------
     #
     # Три моста ниже — все "долгие" (вход до 10 минут, сетевые загрузки
@@ -782,7 +790,7 @@ class AgentBridge:
 
         if n.get("telegram_enabled"):
             import tg_bot
-            if not tg_bot.bot:
+            if not tg_bot.is_configured():
                 results.append(("Telegram", False, "не задан токен бота"))
             elif not n.get("tg_user_id"):
                 results.append(("Telegram", False, "не указан ваш Telegram ID"))

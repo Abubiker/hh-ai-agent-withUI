@@ -123,7 +123,7 @@ class TelegramSink(Sink):
 
     async def solve_captcha(self, image_path: str, prompt: str) -> str | None:
         import tg_bot
-        if not tg_bot.bot:
+        if not tg_bot.is_configured():
             return None
         try:
             await tg_bot.send_captcha_request(image_path, prompt)

@@ -1,0 +1,5 @@
+# Инструменты только для разработки — не тянуть в собранный .app
+# (build_app.sh / HHAgent.spec ставят зависимости из requirements.txt).
+-r requirements.txt
+pytest
+pytest-asyncio

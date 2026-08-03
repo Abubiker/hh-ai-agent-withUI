@@ -2,6 +2,7 @@ import os
 import re
 import time
 import asyncio
+import hashlib
 import random
 import applog
 import database
@@ -557,6 +558,50 @@ async def diagnose_page(page, kind: str = "vacancy", host: str | None = None):
         return "unknown", f"не удалось разобрать страницу: {e}"
 
 
+async def submit_captcha_solution(page, solution: str):
+    """Вводит решение капчи и отправляет форму — общая механика для основного
+    цикла поиска (HHClient.search_and_apply) и разового отклика по ссылке
+    (quick_apply.apply_to_vacancy). Раньше была продублирована в обоих местах
+    почти дословно, с разными по значению, но не по смыслу паузами — здесь
+    один источник правды, и обе стороны ведут себя одинаково «по-человечески»
+    перед антибот-защитой hh.ru.
+
+    Ничего не проверяет и не решает сама — вызывающий код после неё сам
+    смотрит, появилось ли описание вакансии (капча могла быть решена неверно,
+    или это вообще не капча, а Cloudflare-галочка)."""
+    input_field = page.locator('input[type="text"]').first
+    if await input_field.is_visible():
+        await input_field.click()
+        await asyncio.sleep(random.uniform(0.5, 1.2))
+
+        for char in solution:
+            if char == " ":
+                await asyncio.sleep(random.uniform(0.6, 1.5))  # Медленный пробел между словами
+            await input_field.type(char, delay=random.randint(150, 400))  # Человечный ввод
+
+        await asyncio.sleep(random.uniform(1.0, 2.5))
+        # На форме капчи есть кнопка «Отправить»; Enter в React-форме её не
+        # сабмитит, и верно введённый код никуда не уходит — цикл решения
+        # капчи крутился бы, запрашивая новую картинку.
+        submit_captcha = page.locator(
+            'button[type="submit"]:visible, button:has-text("Отправить"):visible'
+        ).first
+        try:
+            if await submit_captcha.is_visible():
+                await submit_captcha.click()
+            else:
+                await input_field.press('Enter')
+        except Exception:
+            await input_field.press('Enter')
+        await asyncio.sleep(6)  # Ждём прогрузки после ввода
+    else:
+        # Поля ввода нет — возможно, это галочка Cloudflare, или капча уже
+        # решена в другом окне. Обновляем страницу — проверить, не снят ли бан.
+        print("Поле ввода не найдено. Обновляем страницу...")
+        await page.reload()
+        await asyncio.sleep(4)
+
+
 async def response_confirmed(page, href: str) -> bool:
     """Спрашивает у самого hh.ru, создан ли отклик на самом деле.
 
@@ -873,6 +918,9 @@ class HHClient:
                             # Если описания нет — разбираемся, ЧТО именно на странице.
                             # Раньше любое отсутствие описания считалось капчей.
                             while not await desc_loc.is_visible():
+                                if control.should_stop():
+                                    print("⏹️ Получен сигнал остановки — прерываю обработку вакансии.")
+                                    return
                                 reason_code, reason_text = await diagnose_page(page, host=self.site["host"])
 
                                 # Архив, удалённая вакансия или чужая вёрстка — не капча,
@@ -903,40 +951,8 @@ class HHClient:
                                         raise SkipVacancy("captcha")
 
                                     print(f"Вводим решение: {solution}")
+                                    await submit_captcha_solution(page, solution)
 
-                                    input_field = page.locator('input[type="text"]').first
-                                    if await input_field.is_visible():
-                                        await input_field.click()
-                                        await asyncio.sleep(random.uniform(0.5, 1.2))
-                                        
-                                        for char in solution:
-                                            if char == " ":
-                                                await asyncio.sleep(random.uniform(0.6, 1.5)) # Медленный пробел между словами
-                                            await input_field.type(char, delay=random.randint(150, 400)) # Человечный ввод
-                                            
-                                        await asyncio.sleep(random.uniform(1.0, 2.5))
-                                        # На форме капчи есть кнопка «Отправить»; Enter в
-                                        # React-форме её не сабмитит, и верно введённый код
-                                        # никуда не уходит — агент крутился в цикле, запрашивая
-                                        # новую картинку.
-                                        submit_captcha = page.locator(
-                                            'button[type="submit"]:visible, button:has-text("Отправить"):visible'
-                                        ).first
-                                        try:
-                                            if await submit_captcha.is_visible():
-                                                await submit_captcha.click()
-                                            else:
-                                                await input_field.press('Enter')
-                                        except Exception:
-                                            await input_field.press('Enter')
-                                        await asyncio.sleep(6) # Ждем прогрузки после ввода
-                                    else:
-                                        # Если поля ввода нет (возможно это галочка Cloudflare или вы уже решили её в другом браузере)
-                                        # Просто обновляем страницу, чтобы проверить, не снят ли бан по IP
-                                        print("Поле ввода не найдено. Обновляем страницу...")
-                                        await page.reload()
-                                        await asyncio.sleep(4)
-                                    
                                     # Проверяем, появилось ли описание
                                     desc_loc = page.locator('div[data-qa="vacancy-description"]')
                                     if await desc_loc.is_visible():
@@ -964,6 +980,19 @@ class HHClient:
 
                             # Анализ ИИ
                             if await is_vacancy_suitable(title, description):
+                                # За классификатором внутри одной вакансии могут идти
+                                # ещё генерация письма, резюме-пикер, тест работодателя,
+                                # капча и сам клик по отправке — десятки секунд без единой
+                                # проверки стопа раньше. Проверяем ЗДЕСЬ (до письма — не
+                                # тратим лишний вызов модели) и ещё раз прямо перед кликом
+                                # отправки ниже — это и есть точка, где «Стоп» обязан
+                                # реально остановить агента, а не просто отложить это на
+                                # следующую вакансию. Вакансию в базу НЕ пишем — как и на
+                                # любой другой стоп-проверке, следующий сеанс рассмотрит
+                                # её заново с нуля.
+                                if control.should_stop():
+                                    print("⏹️ Получен сигнал остановки — прерываю обработку вакансии.")
+                                    return
                                 self.stats.bump("ai_pass")
                                 print(f"✨ Вакансия подходит: {title}")
 
@@ -1090,6 +1119,12 @@ class HHClient:
                                     submit_btn = await find_submit_button(page)
                                     _trace(f"apply: кнопка отправки найдена={submit_btn is not None}")
                                     if submit_btn is not None:
+                                        if control.should_stop():
+                                            # Форма уже заполнена, но НЕ отправлена — «Стоп»
+                                            # должен реально останавливать, а не дожимать
+                                            # последний клик, начатый до команды.
+                                            print(f"⏹️ Остановка перед отправкой — отклик НЕ отправлен: {title}")
+                                            return
                                         await submit_btn.click() # РЕАЛЬНЫЙ ОТКЛИК
                                         _trace("apply: клик по отправке сделан, жду закрытия формы")
                                         # Ждём закрытия формы, а не спим вслепую: уйти со
@@ -1226,27 +1261,38 @@ class HHClient:
         chat_cards = await self.page.locator('div[data-qa="negotiations-item"]').filter(has=self.page.locator('span[data-qa="negotiations-item-badge"]')).all()
         
         for chat_card in chat_cards:
-            
+            # Без этой проверки много чатов с бейджем = агент продолжает
+            # открывать страницу за страницей уже после команды «Стоп» —
+            # тот же класс бага, что и в самом поиске (см. should_stop() в
+            # search_and_apply), просто в отдельном методе с отдельным циклом.
+            if control.should_stop():
+                return
+
             title_loc = chat_card.locator('a[data-qa="negotiations-item-vacancy-link"]')
             title = await title_loc.inner_text() if await title_loc.is_visible() else "Неизвестно"
-            
+
             # Переходим в чат
             chat_link = await title_loc.get_attribute("href")
             if chat_link:
                 chat_page = await hh_session.new_stealth_page(self.context)
                 await chat_page.goto(f"{base}{chat_link}", wait_until="domcontentloaded")
                 await asyncio.sleep(3)
-                
+
                 # Получаем последнее сообщение
                 messages = await chat_page.locator('div[data-qa="chat-message-text"]').all()
                 if messages:
                     last_msg = await messages[-1].inner_text()
-                    msg_id = f"{chat_link}_{len(messages)}" # Примитивный ID
-                    
+                    # Хеш ТЕКСТА последнего сообщения, а не его позиции в списке:
+                    # id вида f"{chat_link}_{len(messages)}" ломался, если число
+                    # сообщений менялось не так, как ожидалось (истории переписки
+                    # на hh.ru может подрезаться подгрузкой) — реальное новое
+                    # сообщение получало id уже виденного и терялось молча.
+                    msg_id = f"{chat_link}_{hashlib.sha256(last_msg.encode('utf-8')).hexdigest()[:16]}"
+
                     if not database.is_message_processed(msg_id):
                         database.add_processed_message(msg_id, chat_link, last_msg)
                         await send_notification_func(f"🔔 <b>Новое сообщение от работодателя!</b>\nВакансия: {title}\n\n<i>{last_msg}</i>\n<a href='{base}{chat_link}'>Перейти к чату</a>", kind="reply")
-                
+
                 await chat_page.close()
 
     async def stop(self):

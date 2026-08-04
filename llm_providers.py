@@ -259,6 +259,7 @@ OPENAI_PRESETS = [
     ("Groq", "https://api.groq.com/openai/v1", "быстрый, ключ обязателен"),
     ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai",
      "есть бесплатный лимит, ключ обязателен"),
+    ("NVIDIA Build", "https://integrate.api.nvidia.com/v1", "ключ обязателен, есть бесплатный лимит"),
     ("LM Studio", "http://localhost:1234/v1", "локально, ключ не нужен"),
     ("OpenAI", "https://api.openai.com/v1", "ключ обязателен"),
 ]

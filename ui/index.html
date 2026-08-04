@@ -643,10 +643,60 @@
       <div class="onboard-dot" data-step="2"></div>
       <div class="onboard-dot" data-step="3"></div>
       <div class="onboard-dot" data-step="4"></div>
+      <div class="onboard-dot" data-step="5"></div>
+      <div class="onboard-dot" data-step="6"></div>
+      <div class="onboard-dot" data-step="7"></div>
+      <div class="onboard-dot" data-step="8"></div>
     </div>
 
-    <!-- Шаг 1: сайт -->
-    <div class="onboard-step" id="onboardStep1">
+    <!-- Шаг 1: браузер (Camoufox) -->
+    <div class="onboard-step" id="onboardStepBrowser" data-step="1" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Браузер</div>
+          <div class="desc">Camoufox — антидетект-браузер, снижает риск проверок и капчи со стороны hh.ru.</div>
+        </div>
+      </div>
+      <div id="onboardBrowserMissing">
+        <div class="hint" id="onboardBrowserHint">Camoufox не установлен (~700 МБ)</div>
+        <div class="row" style="align-items:center;justify-content:flex-end">
+          <button class="btn btn-primary" id="btnOnboardInstallBrowser">Установить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Шаг 2: модель (Ollama или ключ) -->
+    <div class="onboard-step" id="onboardStepModel" data-step="2" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Модель</div>
+          <div class="desc">Нужна модель, которая читает вакансии и пишет письма — локальная (Ollama) или облачная по ключу.</div>
+        </div>
+      </div>
+      <div id="onboardOllamaStatus">
+        <div class="hint" id="onboardOllamaHint">Проверяю Ollama…</div>
+        <div class="row" style="align-items:center;gap:10px">
+          <button class="btn btn-primary btn-small" id="btnOnboardGetOllama" style="display:none">Скачать Ollama</button>
+          <button class="btn btn-primary btn-small" id="btnOnboardStartOllama" style="display:none">Запустить Ollama</button>
+          <div class="spacer" style="flex:1"></div>
+          <button class="btn btn-small" id="btnOnboardRecheckOllama">Проверить снова</button>
+        </div>
+      </div>
+      <div class="hairline"></div>
+      <div id="onboardUseKeyToggle">
+        <button class="btn" id="btnOnboardUseKey">Использовать API-ключ вместо Ollama</button>
+      </div>
+      <div id="onboardModelSlot" style="display:none"></div>
+      <div class="hint" id="onboardModelError" style="display:none;color:var(--err)"></div>
+      <div class="row" style="align-items:center;justify-content:flex-end">
+        <button class="btn btn-primary" id="btnOnboardModelNext">Продолжить</button>
+      </div>
+    </div>
+
+    <!-- Шаг 3: сайт -->
+    <div class="onboard-step" id="onboardStep1" data-step="3" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
@@ -660,8 +710,8 @@
       </div>
     </div>
 
-    <!-- Шаг 2: вход -->
-    <div class="onboard-step" id="onboardStep2" style="display:none">
+    <!-- Шаг 4: вход -->
+    <div class="onboard-step" id="onboardStep2" data-step="4" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
@@ -679,8 +729,8 @@
       <div class="hint" id="onboardLoginError" style="display:none;color:var(--err)"></div>
     </div>
 
-    <!-- Шаг 3: резюме -->
-    <div class="onboard-step" id="onboardStep3" style="display:none">
+    <!-- Шаг 5: резюме -->
+    <div class="onboard-step" id="onboardStep3" data-step="5" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
@@ -701,7 +751,7 @@
           <textarea id="onboardManualSummary" style="min-height:200px" placeholder="Опыт, стек, достижения…"></textarea>
         </label>
         <div class="row" style="align-items:center;justify-content:flex-end">
-          <button class="btn btn-primary" id="btnOnboardManualFinish">Сохранить и начать работу</button>
+          <button class="btn btn-primary" id="btnOnboardManualFinish">Сохранить и продолжить</button>
         </div>
       </div>
       <div class="row" style="align-items:center" id="onboardStep3Actions">
@@ -710,8 +760,8 @@
       </div>
     </div>
 
-    <!-- Шаг 4: профиль -->
-    <div class="onboard-step" id="onboardStep4" style="display:none">
+    <!-- Шаг 6: профиль -->
+    <div class="onboard-step" id="onboardStep4" data-step="6" style="display:none">
       <div class="modal-head">
         <div class="icon-box"><i data-icon="pin15"></i></div>
         <div class="text">
@@ -735,7 +785,38 @@
         <button class="btn" id="btnOnboardRetryProfile">Повторить</button>
       </div>
       <div class="row" style="align-items:center;justify-content:flex-end">
-        <button class="btn btn-primary" id="btnOnboardFinish" disabled>Всё верно, начать работу</button>
+        <button class="btn btn-primary" id="btnOnboardFinish" disabled>Всё верно, продолжить</button>
+      </div>
+    </div>
+
+    <!-- Шаг 7: темп -->
+    <div class="onboard-step" id="onboardStepTempo" data-step="7" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Темп работы</div>
+          <div class="desc">Сколько страниц агент проверяет за один круг и сколько ждёт между кругами.</div>
+        </div>
+      </div>
+      <div id="onboardTempoSlot"></div>
+      <div class="row" style="align-items:center;justify-content:flex-end">
+        <button class="btn btn-primary" id="btnOnboardTempoNext">Продолжить</button>
+      </div>
+    </div>
+
+    <!-- Шаг 8: готово -->
+    <div class="onboard-step" id="onboardStepReady" data-step="8" style="display:none">
+      <div class="modal-head">
+        <div class="icon-box"><i data-icon="pin15"></i></div>
+        <div class="text">
+          <div class="title">Всё готово</div>
+          <div class="desc">Проверьте сводку и запускайте — можно свернуть окно, агент продолжит сам.</div>
+        </div>
+      </div>
+      <div class="hint" id="onboardReadySummary"></div>
+      <div class="row" style="align-items:center;justify-content:flex-end;gap:10px">
+        <button class="btn" id="btnOnboardSkipStart">Позже</button>
+        <button class="btn btn-primary" id="btnOnboardStart">Запустить</button>
       </div>
     </div>
   </div>

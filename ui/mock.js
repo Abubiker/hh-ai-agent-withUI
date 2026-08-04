@@ -86,11 +86,17 @@
 
   const ok = (extra) => Promise.resolve(Object.assign({ ok: true }, extra || {}));
 
-  // ?mock=notready показывает экран первого запуска (ничего не настроено)
+  // ?mock=notready показывает экран первого запуска (ничего не настроено);
+  // &nobrowser/&noollama дополнительно эмулируют отсутствие Camoufox/Ollama —
+  // так превьюятся новые шаги 1 и 2 мастера.
   const notReady = /notready/.test(location.search);
+  const noBrowser = notReady && /nobrowser/.test(location.search);
+  const noOllama = notReady && /noollama/.test(location.search);
   const setup = notReady
-    ? { browser: true, ollama_installed: true, ollama_running: true, logged_in: false, site: "hh.ru", resume: false, summary: false }
-    : { browser: true, ollama_installed: true, ollama_running: true, logged_in: true, site: "hh.ru", resume: true, summary: true };
+    ? { browser: !noBrowser, provider: "ollama", ollama_installed: !noOllama, ollama_running: !noOllama,
+        model_ready: !noOllama, logged_in: false, site: "hh.ru", resume: false, summary: false }
+    : { browser: true, provider: "ollama", ollama_installed: true, ollama_running: true, model_ready: true,
+        logged_in: true, site: "hh.ru", resume: true, summary: true };
 
   const SITES = [
     { id: "hh.ru", name: "hh.ru — Россия" },
@@ -177,6 +183,7 @@
         { name: "Mistral", url: "https://api.mistral.ai/v1", note: "ключ обязателен" },
         { name: "Groq", url: "https://api.groq.com/openai/v1", note: "быстрый, ключ обязателен" },
         { name: "Google Gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai", note: "есть бесплатный лимит, ключ обязателен" },
+        { name: "NVIDIA Build", url: "https://integrate.api.nvidia.com/v1", note: "ключ обязателен, есть бесплатный лимит" },
         { name: "LM Studio", url: "http://localhost:1234/v1", note: "локально, ключ не нужен" },
         { name: "OpenAI", url: "https://api.openai.com/v1", note: "ключ обязателен" },
       ] }),

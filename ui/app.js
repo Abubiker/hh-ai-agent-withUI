@@ -2069,8 +2069,15 @@ window.onAgentEvent = (event, data) => {
     if (data && !data.ok) {
       $("btnInstallCamoufox").disabled = false;
       $("camoufoxInstallHint").textContent = "Не установлен — " + (data.message || "ошибка");
+      $("btnOnboardInstallBrowser").disabled = false;
+      $("onboardBrowserHint").textContent = "Не установлен — " + (data.message || "ошибка");
     }
-    refreshSetup();
+    refreshSetup().then(() => {
+      if ($("onboardingBox").classList.contains("show") && data && data.ok
+          && $("onboardStepBrowser").style.display !== "none") {
+        showOnboardStep(2);
+      }
+    });
   }
   else if (event === "await_login") {
     // В мастере первого запуска (шаг «Вход») то же ожидание рендерится
@@ -2106,7 +2113,7 @@ window.onAgentEvent = (event, data) => {
     if (data && data.ok) {
       $("onboardLoginIdle").style.display = "";
       $("onboardLoginError").style.display = "none";
-      showOnboardStep(3);
+      showOnboardStep(5);
     } else {
       $("onboardLoginIdle").style.display = "";
       $("onboardLoginError").style.display = "";
@@ -2170,34 +2177,192 @@ window.onAgentEvent = (event, data) => {
 
 const onboardState = { chosenResume: null };
 
+// Порядок шагов мастера: Camoufox → модель (Ollama/ключ) → сайт+вход →
+// резюме → темп → готово. Сайт+вход (шаг 3 в списке ниже) больше не
+// сменить без нового входа — пропускаем его, если уже залогинены; шаги
+// «темп»/«готово» показываются каждый раз, пока пользователь явно не
+// нажмёт «Продолжить»/«Запустить».
+const ONBOARD_STEPS = [
+  { n: 1, isDone: s => s.browser },
+  { n: 2, isDone: s => s.model_ready },
+  { n: 3, isDone: s => s.logged_in },
+  { n: 4, isDone: s => s.resume && s.summary },
+  { n: 7, isDone: () => false },
+  { n: 8, isDone: () => false },
+];
+
 function needsOnboarding() {
-  return !state.setup || !state.setup.logged_in || !state.setup.resume || !state.setup.summary;
+  return !state.setup || ONBOARD_STEPS.some(st => !st.isDone(state.setup));
 }
 
 function onboardStartStep() {
-  // Сайт (шаг 1) больше не сменить без нового входа — пропускаем его, если
-  // уже залогинены.
-  if (!state.setup.logged_in) return 1;
-  if (!state.setup.resume || !state.setup.summary) return 3;
-  return 4;
+  if (!state.setup) return 1;
+  const first = ONBOARD_STEPS.find(st => !st.isDone(state.setup));
+  return first ? first.n : 8;
+}
+
+// Шаги 2 (модель) и 7 (темп) не дублируют разметку — переносят настоящие
+// карточки из вкладок «Модель»/«Фильтры» в свои слоты и возвращают обратно,
+// как только мастер уходит с этого шага (см. captureOnboardHomes ниже).
+// Иначе id-based функции вроде syncOpenaiPicker()/stepperWire() ловили бы
+// коллизию между двумя копиями одних и тех же элементов.
+const _modelCardHome = { el: null, parent: null, next: null };
+const _tempoCardHome = { el: null, parent: null, next: null };
+function captureOnboardHomes() {
+  const modelCard = $("providerSeg").closest(".card");
+  _modelCardHome.el = modelCard;
+  _modelCardHome.parent = modelCard.parentNode;
+  _modelCardHome.next = modelCard.nextSibling;
+
+  const tempoCard = document.querySelector('[data-stepper="maxPages"]').closest(".card");
+  _tempoCardHome.el = tempoCard;
+  _tempoCardHome.parent = tempoCard.parentNode;
+  _tempoCardHome.next = tempoCard.nextSibling;
+}
+captureOnboardHomes();
+
+function returnOnboardCardsHome(exceptStep) {
+  if (exceptStep !== 2 && _modelCardHome.el.parentNode === $("onboardModelSlot")) {
+    _modelCardHome.parent.insertBefore(_modelCardHome.el, _modelCardHome.next);
+  }
+  if (exceptStep !== 7 && _tempoCardHome.el.parentNode === $("onboardTempoSlot")) {
+    _tempoCardHome.parent.insertBefore(_tempoCardHome.el, _tempoCardHome.next);
+  }
 }
 
 function showOnboardStep(n) {
-  [1, 2, 3, 4].forEach(i => $("onboardStep" + i).style.display = i === n ? "" : "none");
+  returnOnboardCardsHome(n);
+  document.querySelectorAll(".onboard-step").forEach(el => {
+    el.style.display = (+el.dataset.step === n) ? "" : "none";
+  });
   document.querySelectorAll(".onboard-dot").forEach(d => {
     const s = +d.dataset.step;
     d.classList.toggle("active", s === n);
     d.classList.toggle("done", s < n);
   });
-  if (n === 1) renderSiteSeg("onboardSiteSeg");
-  if (n === 2) updateOnboardLoginTitle();
-  if (n === 3) enterOnboardResumeStep();
+  if (n === 1) enterOnboardBrowserStep();
+  if (n === 2) enterOnboardModelStep();
+  if (n === 3) renderSiteSeg("onboardSiteSeg");
+  if (n === 4) updateOnboardLoginTitle();
+  if (n === 5) enterOnboardResumeStep();
+  if (n === 7) enterOnboardTempoStep();
+  if (n === 8) enterOnboardReadyStep();
 }
 
 function openOnboarding() {
   $("onboardingBox").classList.add("show");
   showOnboardStep(onboardStartStep());
 }
+
+/* ---------- шаг 1: браузер (Camoufox) ---------- */
+
+function enterOnboardBrowserStep() {
+  if (state.setup && state.setup.browser) { showOnboardStep(2); return; }
+  $("btnOnboardInstallBrowser").disabled = false;
+  $("onboardBrowserHint").textContent = "Camoufox не установлен (~700 МБ)";
+}
+
+$("btnOnboardInstallBrowser").onclick = async () => {
+  $("btnOnboardInstallBrowser").disabled = true;
+  $("onboardBrowserHint").textContent = "Устанавливаю… обычно 1–2 минуты";
+  await api().install_camoufox();
+};
+
+/* ---------- шаг 2: модель (Ollama или ключ) ---------- */
+
+function updateOnboardOllamaStatus() {
+  const s = state.setup || {};
+  $("onboardOllamaHint").textContent = s.ollama_installed
+    ? "Ollama установлена, но не запущена."
+    : "Ollama не установлена.";
+  $("btnOnboardGetOllama").style.display = s.ollama_installed ? "none" : "";
+  $("btnOnboardStartOllama").style.display = s.ollama_installed ? "" : "none";
+  $("btnOnboardStartOllama").disabled = false;
+  $("btnOnboardStartOllama").textContent = "Запустить Ollama";
+}
+
+function enterOnboardModelStep() {
+  if (state.setup && state.setup.model_ready) { showOnboardStep(3); return; }
+  $("onboardOllamaStatus").style.display = "";
+  $("onboardUseKeyToggle").style.display = "";
+  $("onboardModelSlot").style.display = "none";
+  $("onboardModelError").style.display = "none";
+  updateOnboardOllamaStatus();
+}
+
+$("btnOnboardGetOllama").onclick = () => api().open_url("https://ollama.com/download");
+$("btnOnboardStartOllama").onclick = async () => {
+  $("btnOnboardStartOllama").disabled = true;
+  $("btnOnboardStartOllama").textContent = "Запускаю…";
+  await api().open_ollama_app();
+  // Приложению нужно несколько секунд, чтобы поднять сервер на 11434.
+  setTimeout(async () => {
+    await refreshSetup();
+    if (state.setup.model_ready) { showOnboardStep(3); return; }
+    updateOnboardOllamaStatus();
+  }, 4000);
+};
+$("btnOnboardRecheckOllama").onclick = async () => {
+  await refreshSetup();
+  if (state.setup.model_ready) { showOnboardStep(3); return; }
+  updateOnboardOllamaStatus();
+};
+
+$("btnOnboardUseKey").onclick = () => {
+  $("onboardOllamaStatus").style.display = "none";
+  $("onboardUseKeyToggle").style.display = "none";
+  $("onboardModelSlot").style.display = "";
+  $("onboardModelSlot").appendChild(_modelCardHome.el);
+  // Ollama здесь уже не сработала — показывать её как активную бессмысленно.
+  const seg = document.querySelector("#providerSeg [data-p='openai_compat']");
+  if (seg && !seg.classList.contains("active")) seg.click();
+};
+
+$("btnOnboardModelNext").onclick = async () => {
+  const btn = $("btnOnboardModelNext");
+  btn.disabled = true;
+  $("onboardModelError").style.display = "none";
+  try {
+    await api().save_settings(collect());
+    state.settings.llm = collect().llm;
+    resetModelDirty();
+    updateSidebarFooter();
+    const r = await api().check_provider();
+    await refreshSetup();
+    if (r.ok) {
+      showOnboardStep(3);
+    } else {
+      $("onboardModelError").style.display = "";
+      $("onboardModelError").textContent = r.message || "Не удалось подключиться";
+    }
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+/* ---------- шаг 7: темп ---------- */
+
+function enterOnboardTempoStep() {
+  $("onboardTempoSlot").appendChild(_tempoCardHome.el);
+}
+
+$("btnOnboardTempoNext").onclick = () => showOnboardStep(8);
+
+/* ---------- шаг 8: готово ---------- */
+
+function enterOnboardReadyStep() {
+  const site = sitesCache && sitesCache.sites.find(s => s.id === activeSiteId());
+  const siteName = site ? site.name : "hh.ru";
+  const resumeName = (state.settings && state.settings.resume && state.settings.resume.target_name) || "—";
+  const llm = (state.settings && state.settings.llm) || {};
+  const modelName = llm.provider === "ollama" ? llm.ollama_model
+    : llm.provider === "anthropic" ? llm.anthropic_model : llm.openai_model;
+  $("onboardReadySummary").innerHTML =
+    `Сайт: <b>${esc(siteName)}</b><br>Резюме: <b>${esc(resumeName)}</b><br>Модель: <b>${esc(modelName || "не выбрана")}</b>`;
+}
+
+$("btnOnboardStart").onclick = finishOnboarding;
+$("btnOnboardSkipStart").onclick = () => { $("onboardingBox").classList.remove("show"); };
 
 function enterOnboardResumeStep() {
   $("onboardResumesLoading").style.display = "";
@@ -2217,7 +2382,7 @@ function renderOnboardResumes(resumes) {
 
 function onboardPickResume(r) {
   onboardState.chosenResume = r;
-  showOnboardStep(4);
+  showOnboardStep(6);
   $("onboardResumeName").value = r.title;
   $("onboardProfileForm").style.display = "none";
   $("onboardProfileErrorBox").style.display = "none";
@@ -2235,14 +2400,21 @@ function onboardValidateStep3() {
   $("btnOnboardFinish").disabled = !ok;
 }
 
-async function finishOnboarding(name, summary) {
+// Сохраняет резюме/профиль и переходит к темпу — раньше это же имя
+// (finishOnboarding) сразу закрывало мастер и запускало агента; теперь
+// запуск отложен до отдельного финального шага (см. enterOnboardReadyStep).
+async function saveResumeAndContinue(name, summary) {
   await api().save_settings({ resume: { target_name: name, summary } });
-  $("onboardingBox").classList.remove("show");
   // loadSettings(), а не только refreshSetup(): иначе поля на вкладке
   // «Резюме и поиск» остались бы пустыми в живом DOM, и следующий
   // collectWithoutModel() внутри startAgent() отправил бы их назад
   // пустыми, затерев то, что только что сохранил мастер.
   await loadSettings();
+  showOnboardStep(7);
+}
+
+async function finishOnboarding() {
+  $("onboardingBox").classList.remove("show");
   await startAgent();
 }
 
@@ -2252,7 +2424,7 @@ async function finishOnboarding(name, summary) {
 // поверх первого — оба висели и ждали, окна множились. Бэкенд теперь тоже
 // это отклоняет (AgentBridge._wizard_login_busy), но проверка на клике —
 // более быстрая обратная связь.
-$("btnOnboardSiteNext").onclick = () => showOnboardStep(2);
+$("btnOnboardSiteNext").onclick = () => showOnboardStep(4);
 
 let onboardLoginBusy = false;
 $("btnOnboardLogin").onclick = () => {
@@ -2279,7 +2451,7 @@ $("btnOnboardManualFinish").onclick = async () => {
   const name = $("onboardManualName").value.trim();
   const summary = $("onboardManualSummary").value.trim();
   if (!name || !summary) return;
-  await finishOnboarding(name, summary);
+  await saveResumeAndContinue(name, summary);
 };
 $("btnOnboardRetryProfile").onclick = () => {
   if (!onboardState.chosenResume) return;
@@ -2289,7 +2461,7 @@ $("btnOnboardRetryProfile").onclick = () => {
   api().wizard_condense_resume(onboardState.chosenResume.url);
 };
 $("btnOnboardFinish").onclick = async () => {
-  await finishOnboarding($("onboardResumeName").value.trim(), $("onboardResumeSummary").value.trim());
+  await saveResumeAndContinue($("onboardResumeName").value.trim(), $("onboardResumeSummary").value.trim());
 };
 $("onboardResumeName").addEventListener("input", onboardValidateStep3);
 $("onboardResumeSummary").addEventListener("input", () => { updateOnboardSummaryCount(); onboardValidateStep3(); });

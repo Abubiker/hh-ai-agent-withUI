@@ -939,31 +939,47 @@ $("providerSeg").addEventListener("click", e => {
   markModelDirty();
 });
 
+// Нужна выбранная модель — иначе «Проверить» бьёт по пустому полю и просто
+// шлёт в toast невнятную ошибку сервиса вместо явного запрета кликать.
+function hasSelectedModel() {
+  const p = document.querySelector("#providerSeg button.active")?.dataset.p;
+  if (p === "ollama") return !!$("ollamaModel").value.trim();
+  if (p === "anthropic") return !!$("anthropicModel").value.trim();
+  return !!$("openaiModel").value.trim();
+}
+// Пока проверка в полёте, кнопку трогать нельзя — иначе resetModelDirty()
+// (вызывается тут же, сразу после сохранения) сам пересчитывает disabled по
+// hasSelectedModel() и включает кнопку обратно раньше, чем придёт ответ.
+let providerCheckPending = false;
+function updateCheckButtonState() {
+  if (providerCheckPending) return;
+  $("btnCheck").disabled = !hasSelectedModel();
+}
+
 $("btnCheck").onclick = async () => {
+  if (!hasSelectedModel() || providerCheckPending) return;
+  providerCheckPending = true;
   const btn = $("btnCheck");
   btn.disabled = true;                       // запрос не мгновенный — второй клик не нужен
   $("providerStatusPill").style.display = "none";
   $("providerStatusMsg").textContent = "";
-  toast("wait", "Отправляю запрос к модели…");
   try {
     await api().save_settings(collect());    // проверяем то, что видит пользователь
     state.settings.llm = collect().llm;      // сайдбар читает state.settings, не поля
     resetModelDirty();                       // сохранили — помечать нечего
     updateSidebarFooter();
-    const r = await api().check_provider();
-    if (r.ok) {
-      toast("ok", "Подключение работает", r.message);
-      $("providerStatusPill").style.display = "inline-flex";
-      $("providerStatusPill").innerHTML = `${ICON.check12}Отвечает`;
-    } else {
-      toast("err", "Подключиться не удалось", r.message);
-      $("providerStatusMsg").innerHTML = `<span style="color:var(--err)">${esc(r.message)}</span>`;
-    }
+    // check_provider() больше не блокирует мост до 60с — результат придёт
+    // событием provider_check_done, а зависший запрос можно прервать
+    // прямо из тоста (иначе единственный выход был убить приложение).
+    toast("wait", "Отправляю запрос к модели…", "", { label: "Отменить", onClick: async () => {
+      $("toastAction").disabled = true;
+      await api().cancel_provider_check();
+    } });
+    await api().check_provider();
   } catch (e) {
+    providerCheckPending = false;
     toast("err", "Проверка сорвалась", String(e));
-  } finally {
-    btn.disabled = false;
-    refreshSetup();
+    btn.disabled = !hasSelectedModel();
   }
 };
 $("btnRefresh").onclick = () => refreshModels();
@@ -1341,8 +1357,13 @@ function setChatStatus(text) {
     el = document.createElement("div");
     el.id = "chatStatusLine";
     el.className = "chat-typing";
-    el.innerHTML = `<span class="dot"></span><span id="chatStatusText"></span>`;
+    el.innerHTML = `<span class="dot"></span><span id="chatStatusText"></span>`
+      + `<button type="button" class="link" id="btnChatStop">Остановить</button>`;
     $("chatMessages").appendChild(el);
+    // Раньше остановить ответ модели можно было только закрытием приложения
+    // (если провайдер завис) — stop_chat() отменяет фоновую задачу так же,
+    // как cancel_provider_check() на вкладке «Модель».
+    $("btnChatStop").onclick = () => api().stop_chat();
   }
   $("chatStatusText").textContent = text;
   el.style.display = "flex";
@@ -1458,6 +1479,7 @@ function markModelDirty() {
   // Сайдбар сюда не трогаем: он должен показывать сохранённое состояние,
   // а эта функция вызывается на каждое движение по вкладке, включая
   // переключение провайдера ещё до нажатия «Сохранить».
+  updateCheckButtonState();
 }
 
 function resetModelDirty() {
@@ -2062,6 +2084,22 @@ window.onAgentEvent = (event, data) => {
     setTimeout(() => $("captchaInput").focus(), 60);
   }
   else if (event === "captcha_close") $("captchaBox").classList.remove("show");
+  else if (event === "provider_check_done") {
+    providerCheckPending = false;
+    if (data && data.cancelled) {
+      toast("ok", "Проверка отменена");
+      $("providerStatusPill").style.display = "none";
+    } else if (data && data.ok) {
+      toast("ok", "Подключение работает", data.message);
+      $("providerStatusPill").style.display = "inline-flex";
+      $("providerStatusPill").innerHTML = `${ICON.check12}Отвечает`;
+    } else {
+      toast("err", "Подключиться не удалось", (data && data.message) || "");
+      $("providerStatusMsg").innerHTML = `<span style="color:var(--err)">${esc((data && data.message) || "")}</span>`;
+    }
+    $("btnCheck").disabled = !hasSelectedModel();
+    refreshSetup();
+  }
   else if (event === "setup_done") {
     // Кнопка установки Camoufox сама спрячется через updateCamoufoxInstallRow(),
     // если ставилось успешно; при неудаче строка остаётся видимой — тогда
@@ -2191,8 +2229,14 @@ const ONBOARD_STEPS = [
   { n: 8, isDone: () => false },
 ];
 
+// Не через ONBOARD_STEPS.some(...): там шаги 7/8 (темп/готово) нарочно
+// всегда isDone:false, чтобы onboardStartStep() при повторном ОТКРЫТИИ
+// мастера всегда останавливался на них — но как гейт "нужен ли мастер
+// вообще" это никогда не даст закрыться, мастер вылезал бы на каждый
+// запуск. Здесь — только настоящие предпосылки первого запуска.
 function needsOnboarding() {
-  return !state.setup || ONBOARD_STEPS.some(st => !st.isDone(state.setup));
+  const s = state.setup;
+  return !s || !s.browser || !s.model_ready || !s.logged_in || !s.resume || !s.summary;
 }
 
 function onboardStartStep() {

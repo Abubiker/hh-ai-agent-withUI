@@ -85,6 +85,7 @@
   ];
 
   const ok = (extra) => Promise.resolve(Object.assign({ ok: true }, extra || {}));
+  let providerCheckTimer = null;
 
   // ?mock=notready показывает экран первого запуска (ничего не настроено);
   // &nobrowser/&noollama дополнительно эмулируют отсутствие Camoufox/Ollama —
@@ -203,7 +204,23 @@
       copy_to_clipboard: () => ok(),
       list_models_detail: () => ok({ models }),
       delete_model: (name) => { const i = models.findIndex(m => m.name === name); if (i >= 0) models.splice(i, 1); return ok(); },
-      check_provider: () => ok({ message: "Ollama готова, модель gemma4:e4b-it-qat" }),
+      // Настоящий бэкенд больше не блокирует мост — результат теперь всегда
+      // приходит событием provider_check_done (см. ui_app.py).
+      check_provider: () => {
+        providerCheckTimer = setTimeout(() => { providerCheckTimer = null;
+          window.onAgentEvent("provider_check_done",
+            { ok: true, message: "Ollama готова, модель gemma4:e4b-it-qat" }); }, 900);
+        return ok();
+      },
+      cancel_provider_check: () => {
+        if (providerCheckTimer) {
+          clearTimeout(providerCheckTimer);
+          providerCheckTimer = null;
+          window.onAgentEvent("provider_check_done", { ok: false, message: "Остановлено", cancelled: true });
+        }
+        return ok();
+      },
+      stop_chat: () => ok(),
       test_notification: () => ok({ message: "Рабочий стол — ОК; Telegram — ОК" }),
       start_agent: () => { demo(); return ok(); },
       stop_agent: () => { window.onAgentEvent("state", { running: false }); return ok(); },

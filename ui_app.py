@@ -135,6 +135,8 @@ class AgentBridge:
             for t in database.load_chat_turns()
         ]
         self._chat_busy = False
+        self._chat_future = None
+        self._provider_check_future = None
         # Гвард на мастер первого запуска: без него повторный клик «Войти»
         # (пока первая попытка ещё ждёт вход) открывал ВТОРОЙ браузер поверх
         # первого — оба висели и ждали, каждый со своим окном.
@@ -291,13 +293,34 @@ class AgentBridge:
     # ---------- модель ----------
 
     def check_provider(self):
+        # Раньше блокировала мост до 60с — если провайдер завис (не ответил
+        # и не уронил соединение), окно не отвечало вообще, единственным
+        # выходом было убить приложение. Теперь не ждём здесь: результат
+        # приходит событием provider_check_done, а зависший запрос можно
+        # прервать через cancel_provider_check() (см. там же про отмену).
+        self._provider_check_future = self._submit(self._run_provider_check())
+        return {"ok": True}
+
+    async def _run_provider_check(self):
         from llm_providers import get_provider
         try:
-            fut = self._submit(get_provider().health())
-            ok, msg = fut.result(timeout=60)
-            return {"ok": ok, "message": msg}
+            ok, msg = await get_provider().health()
+            self._emit("provider_check_done", {"ok": ok, "message": msg})
+        except asyncio.CancelledError:
+            self._emit("provider_check_done", {"ok": False, "message": "Остановлено", "cancelled": True})
+            raise
         except Exception as e:
-            return {"ok": False, "message": str(e)}
+            self._emit("provider_check_done", {"ok": False, "message": str(e)})
+
+    def cancel_provider_check(self):
+        # concurrent.futures.Future из run_coroutine_threadsafe: cancel()
+        # потокобезопасен и планирует отмену корутины в её собственном
+        # цикле — если она сейчас ждёт на aiohttp-запросе, отмена закрывает
+        # соединение, а не просто перестаёт слушать результат.
+        fut = self._provider_check_future
+        if fut and not fut.done():
+            fut.cancel()
+        return {"ok": True}
 
     def list_models(self):
         from llm_providers import get_provider
@@ -403,7 +426,7 @@ class AgentBridge:
             turn["image_b64"] = image_b64
         self._chat_history.append(turn)
         database.add_chat_turn("user", turn["content"], image_b64)
-        self._submit(self._run_chat_turn())
+        self._chat_future = self._submit(self._run_chat_turn())
         return {"ok": True}
 
     def retry_last_chat_message(self):
@@ -411,7 +434,15 @@ class AgentBridge:
             return {"ok": False, "error": "Дождитесь ответа"}
         if not self._chat_history or self._chat_history[-1]["role"] != "user":
             return {"ok": False, "error": "Нечего повторять"}
-        self._submit(self._run_chat_turn())
+        self._chat_future = self._submit(self._run_chat_turn())
+        return {"ok": True}
+
+    def stop_chat(self):
+        """Прерывает текущий ответ модели в чате — та же отмена через
+        Future, что и cancel_provider_check(), см. пояснение там."""
+        fut = self._chat_future
+        if fut and not fut.done():
+            fut.cancel()
         return {"ok": True}
 
     def reset_chat(self):
@@ -531,6 +562,12 @@ class AgentBridge:
             self._chat_history.append({"role": "assistant", "content": reply})
             database.add_chat_turn("assistant", reply)
             self._emit("chat_reply", {"text": reply})
+        except asyncio.CancelledError:
+            # stop_chat() отменяет future — событие через тот же chat_error,
+            # что и обычная ошибка: фронт уже умеет по нему снять "печатает…"
+            # и разблокировать поле ввода, отдельный тип события не нужен.
+            self._emit("chat_error", {"error": "Остановлено"})
+            raise
         finally:
             self._chat_busy = False
 

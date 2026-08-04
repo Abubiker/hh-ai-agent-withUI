@@ -828,13 +828,15 @@
 // нет, поэтому заглушка не может подменить настоящий window.pywebview.api.
 if (location.search.includes("mock")) document.write('<script src="mock.js"><\/script>');
 </script>
-<script src="icons.js"></script>
-<script src="app.js"></script>
+
 <div class="toast" id="toast">
   <div class="light"></div>
   <div class="body"><div class="t" id="toastTitle"></div><div class="d" id="toastText"></div></div>
   <button class="btn btn-primary btn-small" id="toastAction" style="display:none"></button>
   <button class="close" id="toastClose" title="Закрыть">&times;</button>
 </div>
+
+<script src="icons.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

@@ -406,6 +406,7 @@ header.titlebar > * { -webkit-app-region: no-drag; }
 .chat-bubble .chat-retry { margin-top: 6px; display: block; color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; font: inherit; font-size: 12px; }
 .chat-typing { display: flex; align-items: center; gap: 8px; align-self: flex-start; font-size: 12px; color: var(--faint); }
 .chat-typing .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); animation: pulse 1.2s ease-in-out infinite; }
+.chat-typing .link { color: var(--accent); cursor: pointer; background: none; border: none; padding: 0; font: inherit; font-size: 12px; }
 .chat-input-row { display: flex; gap: 10px; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--line2); flex: none; }
 .chat-input { flex: 1; min-width: 0; max-height: 140px; resize: none; }
 .chat-attach-btn { width: 34px; height: 34px; padding: 0; flex: none; }

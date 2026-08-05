@@ -158,6 +158,23 @@ def _extract_urls(text: str) -> set[str]:
     return {m.rstrip(".,);]\"'").rstrip("/") for m in _URL_RE.findall(text or "")}
 
 
+# Мусорный вывод у слабых/квантованных локальных моделей — не выдуманный
+# факт и не инъекция, а битые токены не того алфавита посреди русского
+# предложения (например "फुल-стека" вместо "фулл-стека" — Деванагари). Ни
+# один из этих алфавитов не имеет законной причины быть в письме на русском
+# со стеком технологий на латинице (см. правило 1 в COVER_LETTER_BASE) —
+# латиница и кириллица разрешены всегда, эти блоки нет.
+_UNEXPECTED_SCRIPT_RE = re.compile(
+    "[ऀ-ॿ"   # деванагари
+    "؀-ۿ"    # арабица
+    "֐-׿"    # иврит
+    "฀-๿"    # тайский
+    "가-힯"    # хангыль
+    "぀-ヿ"    # хирагана/катакана
+    "一-鿿"    # китайские иероглифы
+    "]")
+
+
 def _letter_is_safe(letter: str) -> bool:
     """Правдоподобная выдумка/инъекция в письме хуже, чем отправить запасной
     шаблон: письмо уходит настоящему работодателю без второго прохода
@@ -171,6 +188,8 @@ def _letter_is_safe(letter: str) -> bool:
         return False
     stray_urls = _extract_urls(letter) - _extract_urls(settings.resume_summary)
     if stray_urls:
+        return False
+    if _UNEXPECTED_SCRIPT_RE.search(letter):
         return False
     return True
 

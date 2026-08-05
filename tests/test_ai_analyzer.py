@@ -71,6 +71,21 @@ def test_letter_is_safe_accepts_clean_letter(empty_resume):
     assert ai_analyzer._letter_is_safe(letter) is True
 
 
+def test_letter_is_safe_rejects_garbled_script(empty_resume):
+    # Слабые/квантованные локальные модели иногда сыплют мусорными токенами
+    # не того алфавита посреди русского текста — реальный случай:
+    # "फुल-стека" (деванагари) вместо "фулл-стека".
+    letter = "Готов применить свои навыки в контексте вашего फुल-стека."
+    assert ai_analyzer._letter_is_safe(letter) is False
+
+
+def test_letter_is_safe_accepts_latin_tech_terms(empty_resume):
+    # Латиница для стека/инструментов — нормально и ожидаемо, не должна
+    # ложно триггерить проверку на мусорный алфавит.
+    letter = "Стек: Postman, Docker, Git, PostgreSQL, REST API, Confluence."
+    assert ai_analyzer._letter_is_safe(letter) is True
+
+
 # ---------- _clean ----------
 
 def test_clean_truncates_to_max_chars():

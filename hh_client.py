@@ -11,7 +11,7 @@ import sites
 import hh_session
 from stats import Stats
 from ai_analyzer import (is_vacancy_suitable, generate_cover_letter, active_style,
-                          answer_employer_question, NO_DATA_SENTINEL)
+                          answer_employer_question, answer_employer_choice, NO_DATA_SENTINEL)
 from llm_providers import ProviderError
 from settings import settings
 from urllib.parse import quote_plus
@@ -116,6 +116,14 @@ CHAT_HINTS = ("chat", "chatik", "negotiation", "messag", "сообщени", "to
 # полем письма. Именно из-за них письмо уходило в ответ на первый вопрос
 # теста, а сам отклик не создавался.
 TEST_FIELD_PREFIX = "task_"
+# Гейт "есть ли вообще тест работодателя" — раньше смотрел только на
+# textarea, поэтому тест из одних radio/checkbox (без единого текстового
+# вопроса) не детектировался вовсе.
+_TASK_FIELDS_SELECTOR = (
+    f'textarea[name^="{TEST_FIELD_PREFIX}"], '
+    f'input[type="radio"][name^="{TEST_FIELD_PREFIX}"], '
+    f'input[type="checkbox"][name^="{TEST_FIELD_PREFIX}"]'
+)
 
 # Собираем все textarea со страницы вместе с контекстом (data-qa родителей),
 # чтобы отличить поле письма от поля чата, не завися от точных имён.
@@ -264,6 +272,7 @@ async def answer_employer_questions(page, vacancy_title: str, vacancy_descriptio
         return False
 
     answers: dict[int, str] = {}
+    names: dict[int, str] = {}
     for f in usable:
         if not f["label"]:
             if verbose:
@@ -281,15 +290,158 @@ async def answer_employer_questions(page, vacancy_title: str, vacancy_descriptio
                 print(f"   недостаточно данных для ответа: {f['label'][:80]!r}")
             return False
         answers[f["index"]] = answer
+        names[f["index"]] = f["name"]
 
     # Вписываем только после того, как ВСЕ вопросы получили ответ — так
     # неудача на последнем вопросе не оставляет форму в наполовину
     # заполненном состоянии перед откатом на «вручную».
     for index, answer in answers.items():
-        field = page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').nth(index)
-        if not await fill_letter(field, answer):
+        name = names[index]
+
+        async def _resolve(name=name):
+            # По точному name, не по индексу — эта разметка у hh.ru
+            # стабильна (task_<id>_text), в отличие от позиции среди
+            # textarea на странице, которая может сдвинуться (см.
+            # пояснение в докстринге fill_letter).
+            loc = page.locator(f'textarea[name="{name}"]')
+            return loc if await loc.count() == 1 else None
+
+        if not await fill_letter(_resolve, answer):
             if verbose:
                 print(f"   не удалось вписать ответ в поле #{index}")
+            return False
+    return True
+
+
+# Группирует radio/checkbox теста работодателя по общему name (одна группа —
+# один вопрос-с-вариантами) и тянет подпись каждого варианта + самого вопроса.
+# Разметка hh.ru для таких групп не проверена вживую (в отличие от textarea-
+# вопросов, разобранных раньше) — селекторы построены по разумному
+# предположению (общий name на группу, префикс task_, как у текстовых полей).
+# Если структура не совпадёт — group["questionLabel"] или подписи опций
+# окажутся пустыми, answer_employer_choices() честно вернёт False и тест
+# уйдёт на обычный ручной фолбэк, а не сломается посередине.
+_COLLECT_TASK_CHOICES_JS = """
+() => {
+  const groups = new Map();
+  document.querySelectorAll(
+    'input[type="radio"][name^="task_"], input[type="checkbox"][name^="task_"]'
+  ).forEach((el) => {
+    const name = el.getAttribute('name') || '';
+    if (!name) return;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const visible = r.width > 1 && r.height > 1 &&
+                    cs.visibility !== 'hidden' && cs.display !== 'none';
+    let optionLabel = '';
+    if (el.id) {
+      const lbl = document.querySelector(`label[for="${el.id}"]`);
+      if (lbl) optionLabel = lbl.textContent.trim();
+    }
+    if (!optionLabel) {
+      const wrap = el.closest('label') || el.parentElement;
+      if (wrap) optionLabel = wrap.textContent.replace(/\\s+/g, ' ').trim();
+    }
+    if (!groups.has(name)) groups.set(name, { name, type: el.type, options: [] });
+    groups.get(name).options.push({
+      value: el.value || '', id: el.id || '',
+      checked: el.checked, visible, disabled: el.disabled || false,
+      label: optionLabel,
+    });
+  });
+  const out = [];
+  groups.forEach((g) => {
+    const first = document.querySelector(`[name="${g.name}"]`);
+    const container = first && (
+      first.closest('[data-qa*="task"], [data-qa*="question"], fieldset') ||
+      (first.parentElement && first.parentElement.parentElement));
+    let questionLabel = '';
+    if (container) {
+      const clone = container.cloneNode(true);
+      clone.querySelectorAll('input, script, style').forEach(n => n.remove());
+      questionLabel = clone.textContent.replace(/\\s+/g, ' ').trim();
+    }
+    out.push({ name: g.name, type: g.type, questionLabel, options: g.options });
+  });
+  return out;
+}
+"""
+
+
+async def answer_employer_choices(page, vacancy_title: str, vacancy_description: str,
+                                   *, verbose: bool = False) -> bool:
+    """Отвечает на вопросы теста работодателя с вариантами (radio/checkbox) —
+    аналог answer_employer_questions() для текстовых вопросов, тот же
+    принцип all-or-nothing: пишем в DOM только если КАЖДАЯ группа получила
+    ответ, любая неопределённость — честный откат на ручной фолбэк.
+    """
+    groups = await page.evaluate(_COLLECT_TASK_CHOICES_JS)
+    usable = [g for g in groups if any(o["visible"] and not o["disabled"] for o in g["options"])]
+    if not usable:
+        return True  # нет вопросов с вариантами — не проваливаем шаг из-за их отсутствия
+
+    picks: dict[str, list[str]] = {}
+    for g in usable:
+        if not g["questionLabel"]:
+            if verbose:
+                print(f"   не нашёл подпись вопроса-варианта (name={g['name']!r})")
+            return False
+        option_labels = [o["label"] for o in g["options"] if o["label"]]
+        if not option_labels:
+            if verbose:
+                print(f"   у варианта {g['name']!r} нет подписей опций")
+            return False
+        try:
+            answer = await answer_employer_choice(
+                vacancy_title, vacancy_description, g["questionLabel"],
+                option_labels, multi=(g["type"] == "checkbox"))
+        except ProviderError as e:
+            print(f"⚠️ Не удалось получить ответ на вопрос-вариант: {e}")
+            applog.exc()
+            return False
+        if answer == NO_DATA_SENTINEL:
+            if verbose:
+                print(f"   недостаточно данных для выбора: {g['questionLabel'][:80]!r}")
+            return False
+        picks[g["name"]] = answer
+
+    # Пишем в DOM только после того, как ВСЕ группы получили ответ — тот же
+    # all-or-nothing принцип, что у текстовых вопросов.
+    for g in usable:
+        chosen = picks[g["name"]]
+        for opt in g["options"]:
+            if not opt["visible"] or opt["disabled"] or opt["label"] not in chosen:
+                continue
+            selector = f'input[name="{g["name"]}"][value="{opt["value"]}"]' if opt["value"] \
+                else (f'#{opt["id"]}' if opt["id"] else None)
+            if selector is None:
+                if verbose:
+                    print(f"   не могу однозначно адресовать вариант {opt['label']!r}")
+                return False
+            try:
+                await page.locator(selector).check(timeout=2000)
+            except Exception as e:
+                if verbose:
+                    print(f"   не удалось отметить вариант: {e}")
+                applog.exc()
+                return False
+
+        # Проверка после простановки: набор реально отмеченных должен
+        # совпасть с тем, что выбрала модель — иначе честный откат, не
+        # верим на слово собственному клику.
+        checked_now = []
+        for opt in g["options"]:
+            selector = f'input[name="{g["name"]}"][value="{opt["value"]}"]' if opt["value"] \
+                else (f'#{opt["id"]}' if opt["id"] else None)
+            if selector:
+                try:
+                    if await page.locator(selector).is_checked():
+                        checked_now.append(opt["label"])
+                except Exception:
+                    pass
+        if set(checked_now) != set(chosen):
+            if verbose:
+                print(f"   после отметки не совпало: ожидали {chosen}, вышло {checked_now}")
             return False
     return True
 
@@ -442,8 +594,21 @@ async def open_letter_field(page, verbose: bool = True):
     return None
 
 
-async def fill_letter(field, text: str) -> bool:
+async def fill_letter(resolve, text: str) -> bool:
     """Вписывает письмо и проверяет, что оно осталось в поле.
+
+    `resolve` — awaitable-функция БЕЗ аргументов, каждый раз заново находящая
+    актуальное поле (например `lambda: find_letter_field(page)`), а не уже
+    полученный однажды Locator. Раньше сюда передавали готовый
+    `page.locator("textarea").nth(index)` и проверяли значение через ТОТ ЖЕ
+    объект после паузы — а `.nth()` при каждом обращении заново переоценивает
+    `querySelectorAll`, так что если за эти ~0.4с на странице появилась/исчезла
+    другая textarea (чат, поле теста работодателя), индекс мог начать
+    указывать на другой узел. Проверка тогда читала чужое непустое поле,
+    fill_letter рапортовал успех, а реальное письмо оставалось пустым — без
+    расхождения в счётчиках, поэтому баг был незаметен и очень редок. Вызывая
+    resolve() заново перед финальной проверкой, а не переиспользуя старый
+    объект, эту гонку убираем.
 
     HH — реактивное приложение: fill() иногда не доходит до состояния формы,
     и поле сбрасывается. Поэтому после заполнения значение читается обратно,
@@ -455,25 +620,40 @@ async def fill_letter(field, text: str) -> bool:
     приняла форма. Обрезаем один раз, до обеих попыток.
     """
     text = text[:2000]
-    try:
-        await field.fill(text)
-        await asyncio.sleep(0.4)
-        if (await field.input_value()).strip():
-            return True
-    except Exception:
-        pass
+    last_err = None
+    for use_type in (False, True):
+        field = await resolve()
+        if field is None:
+            continue
+        try:
+            if not use_type:
+                await field.fill(text)
+            else:
+                # Запасной путь: клик + набор текста (некоторые формы
+                # слушают только события ввода, не fill()).
+                await field.click()
+                await asyncio.sleep(0.2)
+                await field.type(text, delay=1)
+            await asyncio.sleep(0.4)
+        except Exception as e:
+            last_err = e
+            continue
 
-    # Запасной путь: клик + набор текста (некоторые формы слушают только события ввода)
-    try:
-        await field.click()
-        await asyncio.sleep(0.2)
-        await field.type(text, delay=1)
-        await asyncio.sleep(0.4)
-        return bool((await field.input_value()).strip())
-    except Exception as e:
-        print(f"   не удалось вписать письмо: {e}")
+        # Переоцениваем поле ЗАНОВО, а не доверяем объекту, который только
+        # что заполняли — см. пояснение в докстринге выше.
+        fresh = await resolve()
+        if fresh is None:
+            continue
+        try:
+            if (await fresh.input_value()).strip():
+                return True
+        except Exception as e:
+            last_err = e
+
+    if last_err:
+        print(f"   не удалось вписать письмо: {last_err}")
         applog.exc()
-        return False
+    return False
 
 
 async def handle_vpn_check(page) -> bool:
@@ -996,18 +1176,22 @@ class HHClient:
                                 self.stats.bump("ai_pass")
                                 print(f"✨ Вакансия подходит: {title}")
 
-                                # Письмо пишется ~12 секунд — без этой строки в логе
-                                # было полное затишье, интерфейсу нечем показать прогресс.
-                                print(f"✍️ Пишу сопроводительное — {title}")
                                 # Стиль читаем ЗАРАНЕЕ (а не отдаём генератору выбирать
                                 # молча), чтобы записать его вместе с откликом в БД —
                                 # иначе конверсию по стилям потом не с чем сравнивать.
                                 letter_style = active_style()
-                                _trace(f"letter: генерация начата ({title})")
-                                cover_letter = await generate_cover_letter(
-                                    title, description, style=letter_style)
-                                self.stats.bump("letters")
-                                _trace("letter: получено, ищу кнопку отклика")
+                                cover_letter = ""
+                                if settings.letters_write_enabled:
+                                    # Письмо пишется ~12 секунд — без этой строки в логе
+                                    # было полное затишье, интерфейсу нечем показать прогресс.
+                                    print(f"✍️ Пишу сопроводительное — {title}")
+                                    _trace(f"letter: генерация начата ({title})")
+                                    cover_letter = await generate_cover_letter(
+                                        title, description, style=letter_style)
+                                    self.stats.bump("letters")
+                                    _trace("letter: получено, ищу кнопку отклика")
+                                else:
+                                    _trace(f"letter: выключено настройкой, пропускаю ({title})")
 
                                 # Пробуем откликнуться
                                 apply_btn = page.locator('a[data-qa="vacancy-response-link-top"]').first
@@ -1054,15 +1238,24 @@ class HHClient:
                                         applog.exc()
 
                                     _trace("apply: шаг 0.5 — проверка теста работодателя")
-                                    # Шаг 0.5: тест работодателя. Его поля называются
+                                    # Шаг 0.5: тест работодателя. Текстовые поля называются
                                     # task_<id>_text и стоят в форме ПЕРЕД полем письма,
                                     # поэтому письмо уходило в ответ на первый вопрос
-                                    # теста, а отклик не создавался вовсе. Сначала пробуем
-                                    # ответить автоматически (только текстовые вопросы) —
-                                    # см. answer_employer_questions; если не вышло, тест
-                                    # по-прежнему уходит человеку целиком, как раньше.
-                                    if await page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').count() > 0:
-                                        if await answer_employer_questions(page, title, description):
+                                    # теста, а отклик не создавался вовсе. Раньше гейт
+                                    # смотрел только на textarea — тест из одних
+                                    # radio/checkbox вообще не триггерил эту ветку, и код
+                                    # молча проезжал мимо теста к письму/отправке. Сначала
+                                    # пробуем ответить автоматически (текст, затем варианты
+                                    # — answer_employer_questions/answer_employer_choices);
+                                    # не вышло — тест по-прежнему уходит человеку целиком.
+                                    if await page.locator(_TASK_FIELDS_SELECTOR).count() > 0:
+                                        text_ok = await answer_employer_questions(page, title, description)
+                                        # Короткое замыкание: не жжём вызовы модели на
+                                        # варианты, если текстовые вопросы уже провалились —
+                                        # тест всё равно целиком уйдёт вручную.
+                                        choices_ok = await answer_employer_choices(page, title, description) \
+                                            if text_ok else True
+                                        if text_ok and choices_ok:
                                             self.stats.bump("questions_answered")
                                             print(f"📝 Тест работодателя пройден автоматически: {title}")
                                         else:
@@ -1081,18 +1274,56 @@ class HHClient:
                                             raise SkipVacancy("employer_test")
 
                                     # Шаг 1-2: находим поле письма (при необходимости раскрыв его)
-                                    # и убеждаемся, что текст реально в него попал.
+                                    # и убеждаемся, что текст реально в него попал. Целиком
+                                    # пропускается, если письма выключены настройкой —
+                                    # letter_sent остаётся False, но ниже require_letter-гейт
+                                    # тоже выключен той же настройкой, так что это не блокирует
+                                    # отправку, а просто идёт сразу к шагу 3.
                                     _trace("apply: шаг 1-2 — поиск поля письма")
                                     letter_sent = False
-                                    letter_field = await open_letter_field(page)
+                                    letter_field = await open_letter_field(page) \
+                                        if settings.letters_write_enabled else None
                                     _trace(f"apply: поле письма найдено={letter_field is not None}")
-                                    if letter_field is None:
+                                    if not settings.letters_write_enabled:
+                                        pass
+                                    elif letter_field is None:
                                         print(f"⚠️ Поле сопроводительного не найдено: {title}")
                                         # Печатаем, что вообще есть на странице: по этому выводу
                                         # видно, как HH назвал поле, если разметка изменилась.
                                         await dump_textareas(page, title)
+
+                                        # Часть вакансий откликается в один клик по apply_btn
+                                        # ВЫШЕ, ещё до формы письма — тогда поля просто нет,
+                                        # потому что отклик уже создан. Раньше этот случай
+                                        # ошибочно уходил в SkipVacancy("no_letter") ниже, хотя
+                                        # отклик на hh.ru уже мог быть отправлен, и пользователь
+                                        # не узнавал об этом вовсе. Спрашиваем сам сайт, а не
+                                        # гадаем по отсутствию поля.
+                                        _trace("apply: поля письма нет — проверяю, не ушёл ли отклик в один клик")
+                                        if await response_confirmed(page, href):
+                                            letter_sent = await attach_letter_after(page, cover_letter)
+                                            database.add_applied_job(
+                                                job_id, title, href,
+                                                style=letter_style if letter_sent else None)
+                                            self.stats.bump("applied")
+                                            if not letter_sent:
+                                                self.stats.bump("applied_no_letter")
+                                            import html as _html
+                                            safe_cover_letter = _html.escape(cover_letter)
+                                            if letter_sent:
+                                                await send_notification_func(
+                                                    f"✅ Успешный отклик (в один клик): <a href='{href}'>{title}</a>\n\n"
+                                                    f"<b>Письмо:</b>\n<i>{safe_cover_letter}</i>", kind="applied")
+                                                print(f"✅ Отклик (в один клик) отправлен с письмом: {title}")
+                                            else:
+                                                await send_notification_func(
+                                                    f"✅ Отклик <b>без письма</b> (в один клик): <a href='{href}'>{title}</a>",
+                                                    kind="applied")
+                                                print(f"✅ Отклик (в один клик) отправлен БЕЗ письма: {title}")
+                                            raise SkipVacancy("applied_instant")
                                     else:
-                                        letter_sent = await fill_letter(letter_field, cover_letter)
+                                        letter_sent = await fill_letter(
+                                            lambda: find_letter_field(page), cover_letter)
                                         _trace(f"apply: письмо вписано={letter_sent}")
                                         if letter_sent:
                                             print("   ✅ письмо вписано в форму отклика")
@@ -1103,7 +1334,7 @@ class HHClient:
                                     # умолчанию пустой отклик не отправляем: вакансия уходит
                                     # в уведомление вместе с готовым письмом — откликнуться
                                     # вручную дешевле, чем сжечь вакансию впустую.
-                                    if not letter_sent and settings.require_letter:
+                                    if not letter_sent and settings.require_letter and settings.letters_write_enabled:
                                         self.stats.bump("skipped_no_letter")
                                         database.add_applied_job(job_id, title, href)
                                         import html as _html
@@ -1174,6 +1405,10 @@ class HHClient:
                                         if letter_sent:
                                             await send_notification_func(f"✅ Успешный отклик: <a href='{href}'>{title}</a>\n\n<b>Письмо:</b>\n<i>{safe_cover_letter}</i>", kind="applied")
                                             print(f"✅ Отклик отправлен с письмом: {title}")
+                                        elif not settings.letters_write_enabled:
+                                            # Не ошибка — пользователь сам выключил письма в настройках.
+                                            await send_notification_func(f"✅ Отклик отправлен: <a href='{href}'>{title}</a>", kind="applied")
+                                            print(f"✅ Отклик отправлен (без письма, выключено настройкой): {title}")
                                         else:
                                             await send_notification_func(f"✅ Отклик <b>без письма</b>: <a href='{href}'>{title}</a>\n\n<i>(HH не дал приложить сопроводительное к этой вакансии)</i>", kind="applied")
                                             print(f"✅ Отклик отправлен БЕЗ письма: {title}")
@@ -1208,7 +1443,7 @@ class HHClient:
                         except SkipVacancy as skip:
                             # Эти случаи уже посчитаны своими счётчиками — иначе
                             # вакансия попала бы сразу в два.
-                            if str(skip) not in ("no_letter", "employer_test", "not_confirmed"):
+                            if str(skip) not in ("no_letter", "employer_test", "not_confirmed", "applied_instant"):
                                 self.stats.bump("skipped_page")
                         except Exception as e:
                             # Сюда попадает и сбой связи с моделью (is_vacancy_suitable бросает

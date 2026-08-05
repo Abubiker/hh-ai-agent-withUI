@@ -17,10 +17,10 @@ from settings import settings, user_file
 import sites
 import hh_session
 from hh_client import (
-    TEST_FIELD_PREFIX, MAX_RESPONSE_ATTEMPTS,
+    _TASK_FIELDS_SELECTOR, MAX_RESPONSE_ATTEMPTS,
     handle_vpn_check, diagnose_page, open_letter_field, fill_letter,
-    find_submit_button, response_confirmed, attach_letter_after,
-    answer_employer_questions, submit_captcha_solution,
+    find_letter_field, find_submit_button, response_confirmed, attach_letter_after,
+    answer_employer_questions, answer_employer_choices, submit_captcha_solution,
 )
 
 VACANCY_URL_RE = re.compile(
@@ -223,10 +223,12 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
         title = await _scrape_title(page)
         description = (await desc_loc.inner_text()).strip()
 
-        status("Пишу сопроводительное…")
         # Стиль читаем заранее — записываем его вместе с откликом в БД.
         letter_style = active_style()
-        cover_letter = await generate_cover_letter(title, description, style=letter_style)
+        cover_letter = ""
+        if settings.letters_write_enabled:
+            status("Пишу сопроводительное…")
+            cover_letter = await generate_cover_letter(title, description, style=letter_style)
 
         apply_btn = page.locator('a[data-qa="vacancy-response-link-top"]').first
         if not await apply_btn.is_visible():
@@ -259,23 +261,46 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
         except Exception:
             pass  # необязательный шаг — единственное резюме и так выбрано
 
-        # Тест работодателя — сначала пробуем ответить автоматически (только
-        # текстовые вопросы, см. answer_employer_questions); не вышло — как
-        # в основном цикле, тест должен пройти человек.
-        if await page.locator(f'textarea[name^="{TEST_FIELD_PREFIX}"]').count() > 0:
-            if not await answer_employer_questions(page, title, description):
+        # Тест работодателя — сначала пробуем ответить автоматически (текст,
+        # затем варианты — answer_employer_questions/answer_employer_choices,
+        # как в основном цикле); не вышло — тест должен пройти человек.
+        if await page.locator(_TASK_FIELDS_SELECTOR).count() > 0:
+            text_ok = await answer_employer_questions(page, title, description)
+            choices_ok = await answer_employer_choices(page, title, description) if text_ok else True
+            if not (text_ok and choices_ok):
                 database.add_applied_job(job_id, title, url)
+                letter_note = f"Сопроводительное письмо уже готово:\n\n⟦letter⟧{cover_letter}⟦/letter⟧" \
+                    if settings.letters_write_enabled else ""
                 raise QuickApplyError(
                     f"У вакансии «{title}» есть тест работодателя — на него нужно ответить "
                     f"вручную на {site['host']}, отклик оттуда не пройдёт автоматически. "
-                    f"Сопроводительное письмо уже готово:\n\n⟦letter⟧{cover_letter}⟦/letter⟧")
+                    f"{letter_note}")
 
         letter_sent = False
-        letter_field = await open_letter_field(page)
-        if letter_field is not None:
-            letter_sent = await fill_letter(letter_field, cover_letter)
+        letter_field = await open_letter_field(page) if settings.letters_write_enabled else None
+        if not settings.letters_write_enabled:
+            pass
+        elif letter_field is None:
+            # Часть вакансий откликается в один клик по apply_btn ВЫШЕ, ещё до
+            # формы письма — тогда поля просто нет, потому что отклик уже
+            # создан (см. тот же случай и пояснение в hh_client.py). Раньше
+            # это ошибочно уходило в "не удалось приложить письмо" ниже, хотя
+            # отклик на hh.ru уже мог быть отправлен.
+            if await response_confirmed(page, url):
+                letter_sent = await attach_letter_after(page, cover_letter)
+                database.add_applied_job(
+                    job_id, title, url, style=letter_style if letter_sent else None)
+                if letter_sent:
+                    return ApplyResult(
+                        f"Готово — откликнулась на «{title}» (в один клик) с письмом:\n\n"
+                        f"⟦letter⟧{cover_letter}⟦/letter⟧", applied=True)
+                return ApplyResult(
+                    f"Готово — откликнулась на «{title}» (в один клик), но без письма.",
+                    applied=True)
+        else:
+            letter_sent = await fill_letter(lambda: find_letter_field(page), cover_letter)
 
-        if not letter_sent and settings.require_letter:
+        if not letter_sent and settings.require_letter and settings.letters_write_enabled:
             database.add_applied_job(job_id, title, url)
             raise QuickApplyError(
                 f"Не удалось приложить сопроводительное к «{title}» — отклик не отправлен. "
@@ -296,7 +321,7 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
             pass
         await page.wait_for_timeout(2000)
 
-        if not letter_sent:
+        if not letter_sent and settings.letters_write_enabled:
             letter_sent = await attach_letter_after(page, cover_letter)
 
         if not await response_confirmed(page, url):
@@ -314,6 +339,8 @@ async def apply_to_vacancy(url: str, *, ui_captcha, captcha_busy,
                 f"Готово — откликнулась на «{title}» с сопроводительным письмом:\n\n"
                 f"⟦letter⟧{cover_letter}⟦/letter⟧",
                 applied=True)
+        if not settings.letters_write_enabled:
+            return ApplyResult(f"Готово — откликнулась на «{title}».", applied=True)
         return ApplyResult(
             f"Готово — откликнулась на «{title}», но без письма ({site['host']} не дал его приложить).",
             applied=True)

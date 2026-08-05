@@ -22,7 +22,7 @@
       experience: ["between1And3", "between3And6", "moreThan6"],
       require_letter: true,
     },
-    letters: { style: "business", review_enabled: true },
+    letters: { style: "business", review_enabled: true, write_enabled: true },
     resume: {
       target_name: "Тестировщик",
       // Демонстрационный профиль: файл открывается в предпросмотре интерфейса,

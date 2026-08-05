@@ -98,6 +98,11 @@ DEFAULTS = {
         # переписывает. Стоит лишний вызов модели на письмо — по умолчанию
         # включено, качество важнее пары секунд.
         "review_enabled": True,
+        # По умолчанию включено — по фидбэку решение оставить/выключить за
+        # пользователем: письма не гарантия ответа, а некоторым вакансиям
+        # нужен только сам отклик. Выключено — агент откликается совсем без
+        # сопроводительного, без обращения к модели на этот шаг вовсе.
+        "write_enabled": True,
     },
     "llm": {
         # ollama | openai_compat | anthropic
@@ -498,6 +503,13 @@ class Settings:
         """Второй проход модели перед отправкой письма — см.
         ai_analyzer.review_cover_letter."""
         return bool(self.data.get("letters", {}).get("review_enabled", True))
+
+    @property
+    def letters_write_enabled(self) -> bool:
+        """Выключено — агент откликается вовсе без сопроводительного письма
+        (ни генерации, ни поиска поля письма в форме), а не просто отправляет
+        пустое. По умолчанию включено."""
+        return bool(self.data.get("letters", {}).get("write_enabled", True))
 
     @property
     def exclusions(self) -> str:

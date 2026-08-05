@@ -44,7 +44,7 @@
         <button class="nav-item" data-tab="resume"><i data-icon="navResume"></i> Резюме и поиск</button>
         <button class="nav-item" data-tab="filters"><i data-icon="navFilters"></i> Фильтры</button>
         <button class="nav-item" data-tab="model"><i data-icon="navModel"></i> Модель<span class="dot-err" id="navModelErr" style="display:none"></span></button>
-        <button class="nav-item" data-tab="notify"><i data-icon="navNotify"></i> Настройки</button>
+        <button class="nav-item" data-tab="notify"><i data-icon="navSettings"></i> Настройки</button>
         <button class="nav-item" data-tab="chat"><i data-icon="navChat"></i> Чат</button>
       </div>
       <div class="sidebar-footer">
@@ -224,14 +224,24 @@
 
           <div class="card">
             <div class="card-title">Стиль сопроводительного</div>
-            <div id="letterStyles"></div>
-            <div class="hint">Действует один стиль — выбирайте, каким агент будет писать письма.</div>
-            <div class="hairline"></div>
             <div class="switch-row">
-              <div id="letterReviewSwitch" class="switch"><div class="knob"></div></div>
+              <div id="writeLettersSwitch" class="switch"><div class="knob"></div></div>
               <div class="text">
-                <div class="t">Проверять письмо перед отправкой</div>
-                <div class="d">Второй проход модели: убирает повторы и воду, при необходимости переписывает. Отклик занимает на пару секунд дольше.</div>
+                <div class="t">Писать сопроводительные письма</div>
+                <div class="d">Выключено — агент просто откликается, без обращения к модели на этот шаг вовсе. Стиль и проверка ниже действуют, только если включено.</div>
+              </div>
+            </div>
+            <div class="hairline"></div>
+            <div id="letterStyleFields">
+              <div id="letterStyles"></div>
+              <div class="hint">Действует один стиль — выбирайте, каким агент будет писать письма.</div>
+              <div class="hairline"></div>
+              <div class="switch-row">
+                <div id="letterReviewSwitch" class="switch"><div class="knob"></div></div>
+                <div class="text">
+                  <div class="t">Проверять письмо перед отправкой</div>
+                  <div class="d">Второй проход модели: убирает повторы и воду, при необходимости переписывает. Отклик занимает на пару секунд дольше.</div>
+                </div>
               </div>
             </div>
           </div>

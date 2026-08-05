@@ -94,6 +94,25 @@ def test_clean_keeps_cyrillic_first_line():
     assert ai_analyzer._clean(text) == "Здравствуйте:\nВторая строка."
 
 
+def test_clean_strips_unfilled_name_placeholder():
+    # Правило 7 в COVER_LETTER_BASE запрещает подписываться без имени в
+    # профиле, но модель иногда всё равно оставляет плейсхолдер вместо
+    # того, чтобы промолчать — такое реально уходило работодателю.
+    text = "Здравствуйте! Текст письма.\n\n[Имя]"
+    assert ai_analyzer._clean(text) == "Здравствуйте! Текст письма."
+
+
+def test_clean_strips_english_name_placeholder():
+    text = "Текст письма.\n[Your Name]"
+    assert ai_analyzer._clean(text) == "Текст письма."
+
+
+def test_clean_keeps_real_signature():
+    # Настоящее имя в последней строке — не трогаем, только пустые скобки.
+    text = "Здравствуйте! Текст письма.\n\nДмитрий"
+    assert ai_analyzer._clean(text) == "Здравствуйте! Текст письма.\n\nДмитрий"
+
+
 # ---------- _verdict_cache_key ----------
 
 def test_verdict_cache_key_stable_for_same_input(monkeypatch):
@@ -220,3 +239,48 @@ async def test_answer_employer_question_returns_cleaned_answer(monkeypatch, empt
 
     answer = await ai_analyzer.answer_employer_question("Title", "Desc", "Когда готовы выйти?")
     assert answer == "Готов выйти через 2 недели."
+
+
+# ---------- answer_employer_choice ----------
+
+async def test_answer_employer_choice_returns_matching_option(monkeypatch, empty_resume):
+    async def fake_complete(*a, **k):
+        return "Удалённо"
+    monkeypatch.setattr(ai_analyzer, "complete_with_retry", fake_complete)
+
+    answer = await ai_analyzer.answer_employer_choice(
+        "Title", "Desc", "Формат работы?", ["В офисе", "Удалённо", "Гибрид"])
+    assert answer == ["Удалённо"]
+
+
+async def test_answer_employer_choice_no_data_sentinel(monkeypatch, empty_resume):
+    async def fake_complete(*a, **k):
+        return ai_analyzer.NO_DATA_SENTINEL
+    monkeypatch.setattr(ai_analyzer, "complete_with_retry", fake_complete)
+
+    answer = await ai_analyzer.answer_employer_choice(
+        "Title", "Desc", "Готовы к переезду в другую страну?", ["Да", "Нет"])
+    assert answer == ai_analyzer.NO_DATA_SENTINEL
+
+
+async def test_answer_employer_choice_rejects_answer_not_in_options(monkeypatch, empty_resume):
+    # Модель написала отсебятину, не совпадающую дословно ни с одним
+    # вариантом — в реальном DOM кликнуть некуда, честный отказ.
+    async def fake_complete(*a, **k):
+        return "Готов к переезду при определённых условиях"
+    monkeypatch.setattr(ai_analyzer, "complete_with_retry", fake_complete)
+
+    answer = await ai_analyzer.answer_employer_choice(
+        "Title", "Desc", "Готовы к переезду?", ["Да", "Нет"])
+    assert answer == ai_analyzer.NO_DATA_SENTINEL
+
+
+async def test_answer_employer_choice_multi_select_returns_multiple(monkeypatch, empty_resume):
+    async def fake_complete(*a, **k):
+        return "Python\nJavaScript"
+    monkeypatch.setattr(ai_analyzer, "complete_with_retry", fake_complete)
+
+    answer = await ai_analyzer.answer_employer_choice(
+        "Title", "Desc", "Какими языками владеете?",
+        ["Python", "JavaScript", "Go", "Rust"], multi=True)
+    assert answer == ["Python", "JavaScript"]

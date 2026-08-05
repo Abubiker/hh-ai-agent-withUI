@@ -60,6 +60,8 @@ async function loadSettings() {
   setSwitch("screeningRelocationSwitch", !!s.screening?.relocation_ready);
   await renderLetterStyles();
   setSwitch("letterReviewSwitch", s.letters.review_enabled !== false);
+  setSwitch("writeLettersSwitch", s.letters.write_enabled !== false);
+  $("letterStyleFields").style.display = s.letters.write_enabled !== false ? "" : "none";
 
   renderQueryChips();
   setSwitch("titleOnlySwitch", !!s.search.title_only);
@@ -135,7 +137,8 @@ function collect() {
       work_format: $("screeningWorkFormat").value.trim(),
       relocation_ready: hasClass("screeningRelocationSwitch", "on"),
     },
-    letters: { style: activeLetterStyle(), review_enabled: hasClass("letterReviewSwitch", "on") },
+    letters: { style: activeLetterStyle(), review_enabled: hasClass("letterReviewSwitch", "on"),
+               write_enabled: hasClass("writeLettersSwitch", "on") },
     search: {
       queries: state._queries || [],
       title_only: hasClass("titleOnlySwitch", "on"),
@@ -1185,6 +1188,8 @@ wireSwitch("proxyEnabledSwitch", on => { $("proxyFields").style.display = on ? "
 wireSwitch("titleOnlySwitch", () => updateQueriesInfo(), { noAutosave: true });
 wireSwitch("requireLetterSwitch", null, { noAutosave: true });
 wireSwitch("letterReviewSwitch", null, { noAutosave: true });
+wireSwitch("writeLettersSwitch", on => { $("letterStyleFields").style.display = on ? "" : "none"; },
+  { noAutosave: true });
 wireSwitch("screeningRelocationSwitch", null, { noAutosave: true });
 
 // Степперы «Страниц на запрос» и «Пауза между проверками».

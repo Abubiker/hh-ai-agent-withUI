@@ -65,7 +65,7 @@ STYLE_BLOCKS = {
 Абзац 1: что зацепило в вакансии {vacancy_title} и в чём я силён по профилю — с конкретикой.
 Абзац 2: где работаю сейчас и что там делаю, с цифрами; коротко — предыдущий опыт.
 Абзац 3: готовность к тестовому заданию и собеседованию, без канцелярита.
-Последняя строка: имя.
+Последняя строка — подпись по правилу 7 выше (только если имя есть в профиле).
 """,
     "business": """
 СТИЛЬ: деловой. Ровный профессиональный тон, без вычурности и без сухости.
@@ -76,7 +76,7 @@ STYLE_BLOCKS = {
 Абзац 2: где работаю сейчас и что там делаю, с цифрами; затем предыдущий опыт в прошедшем времени.
 Абзац 3: стек, инструменты и рабочие процессы — перечислением.
 Абзац 4: готовность к тестовому заданию и собеседованию.
-Последняя строка: имя.
+Последняя строка — подпись по правилу 7 выше (только если имя есть в профиле).
 """,
     "strict": """
 СТИЛЬ: сдержанный. Короткое официальное письмо — 2 абзаца, без вводных
@@ -87,7 +87,7 @@ STYLE_BLOCKS = {
 Строка 1: "Здравствуйте!"
 Абзац 1: одним–двумя предложениями кто я и почему подхожу на {vacancy_title} — самое релевантное из профиля, без пересказа всей биографии.
 Абзац 2: стек и готовность к дальнейшим шагам (тестовое, собеседование) — сухо, по делу.
-Последняя строка: имя.
+Последняя строка — подпись по правилу 7 выше (только если имя есть в профиле).
 """,
 }
 
@@ -112,7 +112,19 @@ def _clean(text: str, max_chars: int = MAX_LETTER_CHARS) -> str:
     # "Вот письмо в свободном стиле:" — без кириллицы и с двоеточием в конце.
     if len(lines) > 1 and lines[0].rstrip().endswith(":") and not re.search(r"[а-яА-Я]", lines[0]):
         text = lines[1]
-    return text.strip()[:max_chars]
+    text = text.strip()
+
+    # Правило 7 в COVER_LETTER_BASE запрещает подписываться, если имени в
+    # профиле нет — но инструкция не гарантия: модель иногда всё равно
+    # оставляет незаполненный плейсхолдер подписи вместо того, чтобы просто
+    # промолчать ("[Имя]", "[Ваше имя]", "[Name]"). Письмо с таким мусором
+    # реально уходит работодателю, поэтому обрезаем всю строку целиком.
+    lines_final = text.split("\n")
+    if lines_final and re.fullmatch(r"\[[^\]]{0,30}\]", lines_final[-1].strip()) \
+            and re.search(r"им[яе]|фио|name", lines_final[-1], re.IGNORECASE):
+        text = "\n".join(lines_final[:-1]).strip()
+
+    return text[:max_chars]
 
 
 FALLBACK_LETTER = ("Здравствуйте! Прошу рассмотреть мое резюме на эту вакансию. "
@@ -470,3 +482,69 @@ async def answer_employer_question(vacancy_title: str, vacancy_description: str,
     if clean.upper() == NO_DATA_SENTINEL:
         return NO_DATA_SENTINEL
     return _clean(clean, max_chars=500)
+
+
+EMPLOYER_CHOICE_BASE = """
+Ответь на вопрос работодателя из анкеты теста, выбрав ОДИН (или несколько,
+если явно указано "выберите все подходящие") вариант из предложенных, от
+моего лица, как часть отклика на вакансию.
+
+Мой профиль:
+{summary}
+
+Дополнительные анкетные данные:
+{screening_facts}
+
+Вакансия: {vacancy_title}
+Описание: {vacancy_description}
+
+Вопрос работодателя:
+{question}
+
+Варианты ответа (каждый на отдельной строке):
+{options}
+
+КРИТИЧЕСКИЕ ПРАВИЛА (СТРОГО СОБЛЮДАТЬ):
+1. Ответь СТРОГО одним из вариантов выше, дословно как он написан, ничего
+   не меняя и не сокращая. Если допустимо несколько — перечисли каждый
+   выбранный вариант на отдельной строке, тоже дословно.
+2. Опирайся ТОЛЬКО на факты из профиля и анкетных данных выше — не выдумывай.
+3. Если ни один вариант явно не подходит, или данных для выбора не хватает —
+   ответь РОВНО одним словом: {sentinel}
+4. ВЫВОДИ ТОЛЬКО ВЫБРАННЫЙ ВАРИАНТ(Ы), без номеров, кавычек и пояснений.
+"""
+
+
+async def answer_employer_choice(vacancy_title: str, vacancy_description: str,
+                                  question: str, options: list[str],
+                                  *, multi: bool = False) -> list[str] | str:
+    """Отвечает на вопрос теста работодателя с вариантами (radio/checkbox).
+
+    Возвращает список ВЫБРАННЫХ вариантов (для radio — ровно один элемент)
+    ИЛИ NO_DATA_SENTINEL, если ни один вариант не подходит или данных не
+    хватает — тот же принцип честного «не знаю», что и у
+    answer_employer_question.
+
+    Ответ модели, не совпавший ДОСЛОВНО ни с одним из option'ов, тоже
+    трактуется как NO_DATA_SENTINEL: отсебятину, которую потом некуда
+    кликнуть в реальном DOM, лучше явно отклонить, чем угадывать похожий
+    вариант.
+    """
+    prompt = EMPLOYER_CHOICE_BASE.format(
+        summary=settings.resume_summary,
+        screening_facts=_screening_facts_block(),
+        vacancy_title=vacancy_title,
+        vacancy_description=vacancy_description,
+        question=question,
+        options="\n".join(f"- {o}" for o in options),
+        sentinel=NO_DATA_SENTINEL,
+    )
+    answer = await complete_with_retry(prompt, deterministic=True, timeout=120)
+    clean = answer.strip()
+    if clean.upper() == NO_DATA_SENTINEL:
+        return NO_DATA_SENTINEL
+    picked = [line.strip("- ").strip() for line in clean.splitlines() if line.strip()]
+    valid = [p for p in picked if p in options]
+    if not valid:
+        return NO_DATA_SENTINEL
+    return valid if multi else valid[:1]

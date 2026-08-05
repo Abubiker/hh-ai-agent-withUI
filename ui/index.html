@@ -517,6 +517,22 @@
 
           <div class="row">
             <div class="card" style="flex:1">
+              <div class="card-title">Прокси</div>
+              <div class="switch-row">
+                <div id="proxyEnabledSwitch" class="switch"><div class="knob"></div></div>
+                <div class="text"><div class="t">Пускать браузер через прокси</div>
+                  <div class="d">Весь сеанс целиком — вход, поиск, отклики. Часовой пояс и локаль подстраиваются под регион прокси автоматически.</div></div>
+              </div>
+              <div id="proxyFields" class="row" style="padding-left:50px;display:none">
+                <label class="field" style="flex:1"><span class="field-label">Адрес</span><input type="text" id="proxyServer" class="mono" placeholder="http://host:port"></label>
+                <label class="field" style="flex:1"><span class="field-label">Логин</span><input type="text" id="proxyUsername"></label>
+                <label class="field" style="flex:1"><span class="field-label">Пароль</span><input type="password" id="proxyPassword" placeholder="оставьте пустым — не изменится"></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="card" style="flex:1">
               <div class="card-title">Хранение токенов</div>
               <div class="switch-row">
                 <div id="keychainSwitch" class="switch"><div class="knob"></div></div>

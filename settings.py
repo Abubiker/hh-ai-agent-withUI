@@ -137,6 +137,13 @@ DEFAULTS = {
         #         после каждого обновления приложения.
         "use_keychain": False,
     },
+    "network": {
+        # Прокси для браузера (Camoufox) — весь сеанс целиком, не разовый
+        # запрос. Полезно, если сайт видит не тот регион по обычному IP.
+        "proxy_enabled": False,
+        "proxy_server": "",     # host:port или scheme://host:port
+        "proxy_username": "",
+    },
     "ui": {
         # "light" | "dark" | "system" — "system" следует prefers-color-scheme,
         # как было раньше (единственный вариант до этой настройки).
@@ -144,7 +151,7 @@ DEFAULTS = {
     },
 }
 
-SECRET_KEYS = ("tg_bot_token", "anthropic_api_key", "openai_api_key")
+SECRET_KEYS = ("tg_bot_token", "anthropic_api_key", "openai_api_key", "proxy_password")
 
 # Где хранить токены. По умолчанию — файл с правами 0600 рядом с настройками.
 #
@@ -540,6 +547,19 @@ class Settings:
     @property
     def theme(self) -> str:
         return self.data["ui"]["theme"]
+
+    def proxy_config(self) -> dict | None:
+        """Playwright/Camoufox ProxySettings-словарь или None, если прокси
+        выключен или адрес не задан — тогда hh_session просто не передаёт
+        параметр proxy вообще, а не пустой словарь."""
+        net = self.data.get("network", {})
+        if not net.get("proxy_enabled") or not net.get("proxy_server"):
+            return None
+        cfg = {"server": net["proxy_server"]}
+        if net.get("proxy_username"):
+            cfg["username"] = net["proxy_username"]
+            cfg["password"] = self.get_secret("proxy_password")
+        return cfg
 
 
 # Единственный экземпляр на процесс: и CLI, и UI работают с ним.

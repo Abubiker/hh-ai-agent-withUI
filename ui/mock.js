@@ -46,8 +46,9 @@
     },
     schedule: { cycle_pause_minutes: 10 },
     security: { use_keychain: false },
+    network: { proxy_enabled: false, proxy_server: "", proxy_username: "" },
     ui: { theme: "system" },
-    _secrets: { tg_bot_token: true, anthropic_api_key: false, openai_api_key: false },
+    _secrets: { tg_bot_token: true, anthropic_api_key: false, openai_api_key: false, proxy_password: false },
   };
 
   // Хвост ключа считается по хосту адреса — как и в настоящем бэкенде
@@ -120,6 +121,7 @@
           tg_bot_token: secretHint(s._secrets.tg_bot_token ? "123456:AADemoTelegramBotTokenDoNotUse" : ""),
           anthropic_api_key: null,
           openai_api_key: openaiKeyHint(settings.llm.openai_base_url),
+          proxy_password: null,
         };
         s._secrets.openai_api_key = !!s._secret_hints.openai_api_key;
         return Promise.resolve(s);

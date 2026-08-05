@@ -76,9 +76,21 @@ async def open_session(site: dict | None = None, *, headless: bool = True,
         # persistent_context=False — получаем обычный Playwright Browser, на
         # котором storage_state работает как у любого другого движка.
         from camoufox.async_api import AsyncNewBrowser
+        from settings import settings
+        proxy_kwargs = {}
+        proxy = settings.proxy_config()
+        if proxy:
+            # geoip=True подтягивает локаль/часовой пояс/шрифты под реальный
+            # регион прокси (определяется запросом через сам прокси) — без
+            # этого IP меняется, а остальной отпечаток остаётся прежним, что
+            # для антидетект-браузера как раз и есть несостыковка, которую
+            # он должен убирать. mmdb-база геолокации качается один раз
+            # (camoufox[geoip], уже в requirements.txt), при первом запуске
+            # с прокси.
+            proxy_kwargs = {"proxy": proxy, "geoip": True}
         browser = await asyncio.wait_for(
             AsyncNewBrowser(playwright, headless=headless, humanize=True,
-                             persistent_context=False),
+                             persistent_context=False, **proxy_kwargs),
             timeout=BROWSER_LAUNCH_TIMEOUT)
         kwargs = {}
         if os.path.exists(state_path):

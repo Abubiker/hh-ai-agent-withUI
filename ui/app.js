@@ -36,7 +36,8 @@ function renderSecretHints(s) {
   const hints = (s && s._secret_hints) || {};
   for (const [elId, key] of [["tgToken", "tg_bot_token"],
                               ["anthropicKey", "anthropic_api_key"],
-                              ["openaiKey", "openai_api_key"]]) {
+                              ["openaiKey", "openai_api_key"],
+                              ["proxyPassword", "proxy_password"]]) {
     const el = $(elId);
     const hint = hints[key];
     el.placeholder = hint || DEFAULT_SECRET_PLACEHOLDER;
@@ -107,6 +108,10 @@ async function loadSettings() {
   $("tgUserId").value = s.notifications.tg_user_id || "";
   renderEvents();
   setSwitch("keychainSwitch", !!(s.security && s.security.use_keychain));
+  setSwitch("proxyEnabledSwitch", !!(s.network && s.network.proxy_enabled));
+  $("proxyFields").style.display = (s.network && s.network.proxy_enabled) ? "" : "none";
+  $("proxyServer").value = (s.network && s.network.proxy_server) || "";
+  $("proxyUsername").value = (s.network && s.network.proxy_username) || "";
   $("settingsPath").textContent = "";
 
   updateSidebarFooter();
@@ -161,10 +166,16 @@ function collect() {
         .map(c => [c.dataset.ev, c.classList.contains("checked")])),
     },
     security: { use_keychain: hasClass("keychainSwitch", "on") },
+    network: {
+      proxy_enabled: hasClass("proxyEnabledSwitch", "on"),
+      proxy_server: $("proxyServer").value.trim(),
+      proxy_username: $("proxyUsername").value.trim(),
+    },
     _secrets: {
       tg_bot_token: $("tgToken").value.trim(),
       anthropic_api_key: $("anthropicKey").value.trim(),
       openai_api_key: $("openaiKey").value.trim(),
+      proxy_password: $("proxyPassword").value.trim(),
     },
   };
 }
@@ -1170,6 +1181,7 @@ function renderEvents() {
 wireSwitch("desktopSwitch");
 wireSwitch("telegramSwitch", on => { $("tgFields").style.display = on ? "" : "none"; });
 wireSwitch("keychainSwitch");
+wireSwitch("proxyEnabledSwitch", on => { $("proxyFields").style.display = on ? "" : "none"; });
 wireSwitch("titleOnlySwitch", () => updateQueriesInfo(), { noAutosave: true });
 wireSwitch("requireLetterSwitch", null, { noAutosave: true });
 wireSwitch("letterReviewSwitch", null, { noAutosave: true });

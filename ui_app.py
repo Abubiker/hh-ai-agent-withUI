@@ -240,6 +240,7 @@ class AgentBridge:
             # наличие того, что относится к выбранному сейчас адресу.
             "openai_api_key": bool(settings.get_scoped_secret(
                 "openai_api_key", settings.data["llm"]["openai_base_url"])),
+            "proxy_password": bool(settings.get_secret("proxy_password")),
         }
         # Хвост ключа — отдельным полем, НЕ подменяет _secrets выше: тот
         # булев контракт двусторонний (save_settings шлёт туда настоящие
@@ -248,6 +249,7 @@ class AgentBridge:
             "tg_bot_token": _secret_hint(settings.get_secret("tg_bot_token")),
             "anthropic_api_key": _secret_hint(settings.get_secret("anthropic_api_key")),
             "openai_api_key": _openai_key_hint(settings.data["llm"]["openai_base_url"]),
+            "proxy_password": _secret_hint(settings.get_secret("proxy_password")),
         }
         return data
 

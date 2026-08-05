@@ -110,6 +110,17 @@ def _turn_text(turn: dict) -> str:
     return turn.get("content") or ""
 
 
+# Команда в чате «настрой сопроводительные так, чтобы...» — сохраняет
+# доп. пожелание в settings.letters.custom_instructions (см. ui_app._run_chat_turn
+# и ai_analyzer.CUSTOM_INSTRUCTIONS_BLOCK), без обращения к модели: это
+# детерминированное действие, а не тема для обсуждения, тот же принцип, что
+# у quick_apply.has_apply_command.
+LETTER_INSTRUCTION_RE = re.compile(
+    r"(настрой|поменяй|измени|запомни|учти|добавь|не\s+пиши|не\s+упоминай|перестань|убери|пиши)"
+    r".{0,60}(сопроводительн\w*|писем\w*|письма\w*)",
+    re.IGNORECASE)
+
+
 class AgentBridge:
     """Методы этого класса вызываются из JavaScript как window.pywebview.api.*"""
 
@@ -485,6 +496,22 @@ class AgentBridge:
             turns = [{"role": t["role"], "content": t["content"]} for t in self._chat_history]
 
             image_b64 = current.get("image_b64")
+
+            if not image_b64 and LETTER_INSTRUCTION_RE.search(last_user):
+                # Детерминированное действие — к модели не ходим, тут нечего
+                # сочинять (тот же принцип, что у обработки прямой команды
+                # на отклик ниже). Заменяет предыдущее пожелание целиком, а
+                # не дописывает к нему — как и остальные настройки, это
+                # текущее состояние, а не журнал правок.
+                settings.data["letters"]["custom_instructions"] = last_user
+                settings.save()
+                reply = (f"Учла для следующих сопроводительных писем: «{last_user}». "
+                         f"Можно посмотреть и поправить на вкладке «Резюме и поиск».")
+                self._chat_history.append({"role": "assistant", "content": reply})
+                database.add_chat_turn("assistant", reply)
+                self._emit("chat_reply", {"text": reply})
+                return
+
             vacancy_url = None if image_b64 else quick_apply.find_vacancy_url(last_user)
             resume_url = None if (image_b64 or vacancy_url) else resume_reader.find_resume_url(last_user)
 

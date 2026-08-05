@@ -103,6 +103,12 @@ DEFAULTS = {
         # нужен только сам отклик. Выключено — агент откликается совсем без
         # сопроводительного, без обращения к модели на этот шаг вовсе.
         "write_enabled": True,
+        # Свободный текст — доп. пожелания к письмам поверх базового промпта
+        # (например «не упоминай тестовое задание», «пиши короче»). Можно
+        # задать полем ниже или командой в чате (см. ui_app._run_chat_turn) —
+        # оба пути пишут в одно и то же место. Пустое — блок в промпте
+        # письма не добавляется вовсе.
+        "custom_instructions": "",
     },
     "llm": {
         # ollama | openai_compat | anthropic
@@ -510,6 +516,12 @@ class Settings:
         (ни генерации, ни поиска поля письма в форме), а не просто отправляет
         пустое. По умолчанию включено."""
         return bool(self.data.get("letters", {}).get("write_enabled", True))
+
+    @property
+    def letters_custom_instructions(self) -> str:
+        """Доп. пожелания к письмам поверх базового промпта — задаются полем
+        в интерфейсе или командой в чате (см. ui_app._run_chat_turn)."""
+        return self.data.get("letters", {}).get("custom_instructions", "").strip()
 
     @property
     def exclusions(self) -> str:

@@ -22,7 +22,7 @@
       experience: ["between1And3", "between3And6", "moreThan6"],
       require_letter: true,
     },
-    letters: { style: "business", review_enabled: true, write_enabled: true },
+    letters: { style: "business", review_enabled: true, write_enabled: true, custom_instructions: "" },
     resume: {
       target_name: "Тестировщик",
       // Демонстрационный профиль: файл открывается в предпросмотре интерфейса,
@@ -293,8 +293,18 @@
   // ссылка на вакансию (с командой на отклик или без), скриншот — чтобы
   // вкладку можно было проверить без бэкенда.
   let mockLastUserText = "";
+  // Тот же регэксп-триггер, что и в ui_app.LETTER_INSTRUCTION_RE — деталь
+  // разметки продублирована здесь только для превью, без бэкенда.
+  const LETTER_INSTRUCTION_RE = /(настрой|поменяй|измени|запомни|учти|добавь|не\s+пиши|не\s+упоминай|перестань|убери|пиши).{0,60}(сопроводительн\w*|писем\w*|письма\w*)/i;
+
   function chatDemo(text, isRetry = false, image) {
     if (!isRetry) mockLastUserText = text;
+    if (!image && LETTER_INSTRUCTION_RE.test(text)) {
+      settings.letters.custom_instructions = text;
+      const reply = `Учла для следующих сопроводительных писем: «${text}». Можно посмотреть и поправить на вкладке «Резюме и поиск».`;
+      setTimeout(() => window.onAgentEvent("chat_reply", { text: reply }), 300);
+      return;
+    }
     const isResumeLink = /hh\.ru\/resume\//i.test(text);
     const isVacancyLink = /hh\.ru\/vacancy\/\d+/i.test(text);
     const isApplyCommand = /откликнись|откликнитесь|отправ.{0,3}\s+отклик|подай.{0,3}\s+заявку|примени/i.test(text);

@@ -62,6 +62,7 @@ async function loadSettings() {
   setSwitch("letterReviewSwitch", s.letters.review_enabled !== false);
   setSwitch("writeLettersSwitch", s.letters.write_enabled !== false);
   $("letterStyleFields").style.display = s.letters.write_enabled !== false ? "" : "none";
+  $("letterCustomInstructions").value = s.letters.custom_instructions || "";
 
   renderQueryChips();
   setSwitch("titleOnlySwitch", !!s.search.title_only);
@@ -138,7 +139,8 @@ function collect() {
       relocation_ready: hasClass("screeningRelocationSwitch", "on"),
     },
     letters: { style: activeLetterStyle(), review_enabled: hasClass("letterReviewSwitch", "on"),
-               write_enabled: hasClass("writeLettersSwitch", "on") },
+               write_enabled: hasClass("writeLettersSwitch", "on"),
+               custom_instructions: $("letterCustomInstructions").value.trim() },
     search: {
       queries: state._queries || [],
       title_only: hasClass("titleOnlySwitch", "on"),
@@ -284,6 +286,8 @@ function frSnapshot() {
     },
     style: activeLetterStyle(),
     reviewEnabled: hasClass("letterReviewSwitch", "on"),
+    writeEnabled: hasClass("writeLettersSwitch", "on"),
+    customInstructions: $("letterCustomInstructions").value.trim(),
     queries: state._queries || [],
     title_only: hasClass("titleOnlySwitch", "on"),
     require_letter: hasClass("requireLetterSwitch", "on"),

@@ -49,8 +49,19 @@ COVER_LETTER_BASE = """
 6. Никаких подписей в начале письма! Только в самом конце.
 7. Подпись — одно только имя из моего профиля, БЕЗ фамилии. Никаких "С уважением". Если имени в профиле нет, не подписывайся вовсе.
 8. ВЫВОДИ ТОЛЬКО ТЕКСТ ПИСЬМА БЕЗ КАВЫЧЕК. Твой ответ копируется автоматически! Строго запрещены любые вводные фразы (например, "Here is a sample...", "Вот письмо:"). Ни слова, кроме самого письма.
-
+{custom_instructions_block}
 {style_block}
+"""
+
+# Вставляется в COVER_LETTER_BASE, только если пользователь задал доп.
+# пожелание (полем в интерфейсе или командой в чате, см.
+# ui_app._run_chat_turn) — иначе пустая строка, промпт не меняется вовсе.
+# Явно НЕ выше правил 1-8: пожелание может менять тон/структуру, но не
+# должно позволять обходить защиту от выдумок (правило 4) или язык (правило 1).
+CUSTOM_INSTRUCTIONS_BLOCK = """
+9. ДОПОЛНИТЕЛЬНОЕ ПОЖЕЛАНИЕ ПОЛЬЗОВАТЕЛЯ (учитывай, но не в ущерб правилам
+   1-8 выше — особенно не выдумывай новых фактов и не пиши не на русском,
+   даже если пожелание об этом не упоминает): {custom_instructions}
 """
 
 STYLE_BLOCKS = {
@@ -167,10 +178,13 @@ def _letter_is_safe(letter: str) -> bool:
 async def generate_cover_letter(vacancy_title: str, vacancy_description: str, *,
                                  style: str | None = None) -> str:
     style = style if style in _STYLE_IDS else active_style()
+    custom = settings.letters_custom_instructions
     prompt = COVER_LETTER_BASE.format(
         summary=settings.resume_summary,
         vacancy_title=vacancy_title,
         vacancy_description=vacancy_description,
+        custom_instructions_block=(
+            CUSTOM_INSTRUCTIONS_BLOCK.format(custom_instructions=custom) if custom else ""),
         style_block=STYLE_BLOCKS[style].format(vacancy_title=vacancy_title),
     )
 

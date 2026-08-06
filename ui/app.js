@@ -14,6 +14,9 @@ const state = {
   now: { query: null, region: null, page: null, round: 0, vacancy: null, phase: null, phaseAt: 0 },
   saveTimer: null,
   timerInterval: null,
+  chatFolders: [],
+  chatConversations: [],
+  chatActiveId: null,
 };
 
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -1317,6 +1320,213 @@ function renderChatHistory(turns) {
   }
 }
 
+/* ================= чат: папки и диалоги (сайдбар) ================= */
+// Структура — папка это контейнер верхнего уровня, диалоги внутри неё
+// или в корне (folder_id === null). Переименование — инлайн (span → input),
+// не prompt() (не работает в нативном WKWebView, см. renderQueryChips).
+// Удаление — двухшаговое подтверждение, тот же паттерн, что у моделей
+// (см. refreshModelList: первый клик — «Точно удалить?» на 3 сек).
+
+async function reloadChatSidebar() {
+  state.chatFolders = await api().list_chat_folders();
+  state.chatConversations = await api().list_chat_conversations();
+  renderChatSidebar();
+}
+
+function groupChatConversations() {
+  const root = [];
+  const byFolder = new Map();
+  for (const c of state.chatConversations || []) {
+    if (c.folder_id == null) { root.push(c); continue; }
+    if (!byFolder.has(c.folder_id)) byFolder.set(c.folder_id, []);
+    byFolder.get(c.folder_id).push(c);
+  }
+  return { root, byFolder };
+}
+
+function chatConvItemHtml(c) {
+  const active = c.id === state.chatActiveId ? " active" : "";
+  return `<div class="chat-conv-item${active}" data-conv="${c.id}">
+    <span class="title">${esc(c.title)}</span>
+    <div class="chat-row-actions">
+      <button data-rename-conv="${c.id}" title="Переименовать">${ICON.pencil12}</button>
+      <button data-del-conv="${c.id}" title="Удалить">${ICON.trash12}</button>
+    </div>
+  </div>`;
+}
+
+function renderChatSidebar() {
+  const box = $("chatSidebarList");
+  const { root, byFolder } = groupChatConversations();
+  const folders = state.chatFolders || [];
+
+  if (!folders.length && !root.length) {
+    box.innerHTML = `<div class="chat-sidebar-empty">Пока нет диалогов — первое сообщение само создаст диалог. Папки — для группировки, например по разным резюме.</div>`;
+    return;
+  }
+
+  state._collapsedChatFolders = state._collapsedChatFolders || new Set();
+  box.innerHTML = root.map(chatConvItemHtml).join("") + folders.map(f => {
+    const collapsed = state._collapsedChatFolders.has(f.id) ? " collapsed" : "";
+    const items = (byFolder.get(f.id) || []).map(chatConvItemHtml).join("");
+    return `<div class="chat-folder${collapsed}" data-folder="${f.id}">
+      <div class="chat-folder-head" data-folder-head="${f.id}">
+        <span class="caret">${ICON.chevronDown}</span>
+        <span class="name">${esc(f.name)}</span>
+        <div class="chat-row-actions">
+          <button data-add-conv-in="${f.id}" title="Новый диалог в папке">${ICON.plus12}</button>
+          <button data-rename-folder="${f.id}" title="Переименовать папку">${ICON.pencil12}</button>
+          <button data-del-folder="${f.id}" title="Удалить папку">${ICON.trash12}</button>
+        </div>
+      </div>
+      <div class="chat-conv-list">${items}</div>
+    </div>`;
+  }).join("");
+
+  wireChatSidebarEvents(box);
+}
+
+function startChatRename(target, kind, id, currentName) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "chat-rename-input";
+  input.value = currentName;
+  target.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (v && v !== currentName) {
+      if (kind === "folder") await api().rename_chat_folder(id, v);
+      else await api().rename_chat_conversation(id, v);
+    }
+    await reloadChatSidebar();
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    if (e.key === "Escape") { done = true; renderChatSidebar(); }
+  });
+  input.addEventListener("blur", commit);
+}
+
+function armChatDeleteButton(el, confirmTitle, restTitle, onConfirm) {
+  el.onclick = async e => {
+    e.stopPropagation();
+    if (!el.classList.contains("confirm")) {
+      el.classList.add("confirm");
+      el.title = confirmTitle;
+      el._t = setTimeout(() => { el.classList.remove("confirm"); el.title = restTitle; }, 3000);
+      return;
+    }
+    clearTimeout(el._t);
+    await onConfirm();
+  };
+}
+
+function wireChatSidebarEvents(box) {
+  box.querySelectorAll("[data-conv]").forEach(el => el.addEventListener("click", e => {
+    if (e.target.closest(".chat-row-actions")) return;
+    switchConversation(+el.dataset.conv);
+  }));
+  box.querySelectorAll("[data-folder-head]").forEach(el => el.addEventListener("click", e => {
+    if (e.target.closest(".chat-row-actions")) return;
+    const id = +el.dataset.folderHead;
+    if (state._collapsedChatFolders.has(id)) state._collapsedChatFolders.delete(id);
+    else state._collapsedChatFolders.add(id);
+    renderChatSidebar();
+  }));
+  box.querySelectorAll("[data-rename-conv]").forEach(el => el.onclick = e => {
+    e.stopPropagation();
+    const id = +el.dataset.renameConv;
+    const conv = (state.chatConversations || []).find(c => c.id === id);
+    startChatRename(el.closest(".chat-conv-item").querySelector(".title"), "conversation", id, conv ? conv.title : "");
+  });
+  box.querySelectorAll("[data-rename-folder]").forEach(el => el.onclick = e => {
+    e.stopPropagation();
+    const id = +el.dataset.renameFolder;
+    const folder = (state.chatFolders || []).find(f => f.id === id);
+    startChatRename(el.closest(".chat-folder-head").querySelector(".name"), "folder", id, folder ? folder.name : "");
+  });
+  box.querySelectorAll("[data-add-conv-in]").forEach(el => el.onclick = async e => {
+    e.stopPropagation();
+    const r = await api().create_chat_conversation(+el.dataset.addConvIn, "Новый диалог");
+    await reloadChatSidebar();
+    if (r && r.id) await switchConversation(r.id);
+  });
+  box.querySelectorAll("[data-del-conv]").forEach(el => armChatDeleteButton(el, "Точно удалить?", "Удалить", async () => {
+    const id = +el.dataset.delConv;
+    await api().delete_chat_conversation(id);
+    if (state.chatActiveId === id) {
+      state.chatActiveId = null;
+      $("chatMessages").innerHTML = "";
+      $("chatEmpty").style.display = "";
+    }
+    await reloadChatSidebar();
+  }));
+  box.querySelectorAll("[data-del-folder]").forEach(el => armChatDeleteButton(el, "Удалить папку со всем внутри?", "Удалить папку", async () => {
+    const id = +el.dataset.delFolder;
+    const activeWasInFolder = (state.chatConversations || [])
+      .some(c => c.id === state.chatActiveId && c.folder_id === id);
+    await api().delete_chat_folder(id);
+    if (activeWasInFolder) {
+      state.chatActiveId = null;
+      $("chatMessages").innerHTML = "";
+      $("chatEmpty").style.display = "";
+    }
+    await reloadChatSidebar();
+  }));
+}
+
+async function switchConversation(id) {
+  if (id === state.chatActiveId) return;
+  state.chatActiveId = id;
+  $("chatMessages").innerHTML = "";
+  $("chatEmpty").style.display = "";
+  clearChatStatus();
+  const turns = await api().switch_chat_conversation(id);
+  renderChatHistory(turns);
+  renderChatSidebar();
+}
+
+$("btnAddChatFolder").onclick = () => {
+  const box = $("chatSidebarList");
+  // .chat-rename-input рассчитан на flex:1 внутри строки (как при
+  // переименовании — там он подменяет span в .chat-folder-head/.chat-conv-item,
+  // оба flex-row). chatSidebarList — flex-column, без обёртки-строки flex:1
+  // растягивал бы поле на всю высоту списка, а не на ширину.
+  const row = document.createElement("div");
+  row.style.display = "flex";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "chat-rename-input";
+  input.placeholder = "Название папки";
+  row.appendChild(input);
+  box.prepend(row);
+  input.focus();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (v) await api().create_chat_folder(v);
+    await reloadChatSidebar();
+  };
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    if (e.key === "Escape") { done = true; renderChatSidebar(); }
+  });
+  input.addEventListener("blur", commit);
+};
+
+$("btnAddChatConv").onclick = async () => {
+  const r = await api().create_chat_conversation(null, "Новый диалог");
+  await reloadChatSidebar();
+  if (r && r.id) await switchConversation(r.id);
+};
+
 $("chatMessages").addEventListener("click", async e => {
   const link = e.target.closest(".chat-link");
   if (link) {
@@ -1416,6 +1626,13 @@ async function sendChatMessage() {
     clearChatStatus();
     setChatSending(false);
     renderChatBubble("assistant", r.error || "Не удалось отправить сообщение", { error: true });
+    return;
+  }
+  if (r.conversation_id != null && r.conversation_id !== state.chatActiveId) {
+    // Первое сообщение само завело диалог (см. AgentBridge.send_chat_message) —
+    // подхватываем его id, чтобы диалог появился в сайдбаре.
+    state.chatActiveId = r.conversation_id;
+    await reloadChatSidebar();
   }
 }
 
@@ -2540,7 +2757,8 @@ window.addEventListener("pywebviewready", async () => {
   await refreshSetup();
   setRunningUi(st.running, st.started_at ? st.started_at : null);
   addLog("Готов к работе.");
-  renderChatHistory(await api().get_chat_history());
+  await reloadChatSidebar();
+  if (state.chatConversations.length) await switchConversation(state.chatConversations[0].id);
   if (needsOnboarding()) openOnboarding();
 });
 

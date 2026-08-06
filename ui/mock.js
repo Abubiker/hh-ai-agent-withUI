@@ -21,6 +21,7 @@
       ],
       experience: ["between1And3", "between3And6", "moreThan6"],
       require_letter: true,
+      exclusions: "",
     },
     letters: { style: "business", review_enabled: true, write_enabled: true, custom_instructions: "" },
     resume: {
@@ -252,10 +253,71 @@
           { id: "shift", name: "Сменный график" },
         ],
       }),
-      send_chat_message: (text, image) => { chatDemo(text, false, image); return ok(); },
+      send_chat_message: (text, image) => {
+        if (mockChatActiveId == null) {
+          const id = mockChatNextId++;
+          mockChatConversations.push({ id, folder_id: null, title: "Новый диалог" });
+          mockChatTurns[id] = [];
+          mockChatActiveId = id;
+        }
+        mockChatTurns[mockChatActiveId].push({ role: "user", content: text || "(изображение без подписи)", image_ref: image || null });
+        chatDemo(text, false, image);
+        return ok({ conversation_id: mockChatActiveId });
+      },
       retry_last_chat_message: () => { chatDemo(mockLastUserText, true); return ok(); },
-      reset_chat: () => ok(),
-      get_chat_history: () => Promise.resolve([]),
+      reset_chat: () => {
+        if (mockChatActiveId != null) mockChatTurns[mockChatActiveId] = [];
+        return ok();
+      },
+      get_chat_history: () => Promise.resolve(
+        (mockChatTurns[mockChatActiveId] || []).map(t => ({
+          role: t.role, text: t.content,
+          image: t.image_ref ? (t.image_ref.startsWith("data:") ? t.image_ref : `data:image/png;base64,${t.image_ref}`) : null,
+        }))),
+      list_chat_folders: () => Promise.resolve(mockChatFolders.slice()),
+      create_chat_folder: (name) => {
+        const id = mockChatNextId++;
+        mockChatFolders.push({ id, name });
+        return ok({ id });
+      },
+      rename_chat_folder: (id, name) => {
+        const f = mockChatFolders.find(f => f.id === id);
+        if (f) f.name = name;
+        return ok();
+      },
+      delete_chat_folder: (id) => {
+        const removedIds = mockChatConversations.filter(c => c.folder_id === id).map(c => c.id);
+        mockChatConversations = mockChatConversations.filter(c => c.folder_id !== id);
+        mockChatFolders = mockChatFolders.filter(f => f.id !== id);
+        removedIds.forEach(cid => delete mockChatTurns[cid]);
+        if (removedIds.includes(mockChatActiveId)) mockChatActiveId = null;
+        return ok();
+      },
+      list_chat_conversations: () => Promise.resolve(mockChatConversations.slice()),
+      create_chat_conversation: (folderId, title) => {
+        const id = mockChatNextId++;
+        mockChatConversations.push({ id, folder_id: folderId ?? null, title: title || "Новый диалог" });
+        mockChatTurns[id] = [];
+        return ok({ id });
+      },
+      rename_chat_conversation: (id, title) => {
+        const c = mockChatConversations.find(c => c.id === id);
+        if (c) c.title = title;
+        return ok();
+      },
+      delete_chat_conversation: (id) => {
+        mockChatConversations = mockChatConversations.filter(c => c.id !== id);
+        delete mockChatTurns[id];
+        if (mockChatActiveId === id) mockChatActiveId = null;
+        return ok();
+      },
+      switch_chat_conversation: (id) => {
+        mockChatActiveId = id;
+        return Promise.resolve((mockChatTurns[id] || []).map(t => ({
+          role: t.role, text: t.content,
+          image: t.image_ref ? (t.image_ref.startsWith("data:") ? t.image_ref : `data:image/png;base64,${t.image_ref}`) : null,
+        })));
+      },
     },
   };
 
@@ -293,15 +355,34 @@
   // ссылка на вакансию (с командой на отклик или без), скриншот — чтобы
   // вкладку можно было проверить без бэкенда.
   let mockLastUserText = "";
+
+  // Папки и диалоги чата — в памяти на время превью, не персистятся
+  // (настоящее хранение и шифрование — только в database.py/chat_crypto.py).
+  let mockChatFolders = [];
+  let mockChatConversations = [];
+  let mockChatNextId = 1;
+  let mockChatActiveId = null;
+  const mockChatTurns = {};  // conversationId -> [{role, content, image_ref}]
+
   // Тот же регэксп-триггер, что и в ui_app.LETTER_INSTRUCTION_RE — деталь
   // разметки продублирована здесь только для превью, без бэкенда.
   const LETTER_INSTRUCTION_RE = /(настрой|поменяй|измени|запомни|учти|добавь|не\s+пиши|не\s+упоминай|перестань|убери|пиши).{0,60}(сопроводительн\w*|писем\w*|письма\w*)/i;
+  // Тот же регэксп-триггер, что и в ui_app.EXCLUSION_INSTRUCTION_RE.
+  const EXCLUSION_INSTRUCTION_RE = /(настрой|поменяй|измени|запомни|учти|добавь|не\s+показывай|не\s+предлагай|исключи|отклоняй).{0,60}(вакансии|исключени\w*|отклонени\w*)/i;
 
   function chatDemo(text, isRetry = false, image) {
     if (!isRetry) mockLastUserText = text;
     if (!image && LETTER_INSTRUCTION_RE.test(text)) {
       settings.letters.custom_instructions = text;
       const reply = `Учла для следующих сопроводительных писем: «${text}». Можно посмотреть и поправить на вкладке «Резюме и поиск».`;
+      setTimeout(() => window.onAgentEvent("chat_reply", { text: reply }), 300);
+      return;
+    }
+    if (!image && EXCLUSION_INSTRUCTION_RE.test(text)) {
+      const lines = (settings.search.exclusions || "").split("\n").filter(l => l.trim());
+      if (!lines.includes(text)) lines.push(text);
+      settings.search.exclusions = lines.join("\n");
+      const reply = `Добавила в список причин отклонения: «${text}». Можно посмотреть и поправить на вкладке «Фильтры».`;
       setTimeout(() => window.onAgentEvent("chat_reply", { text: reply }), 300);
       return;
     }

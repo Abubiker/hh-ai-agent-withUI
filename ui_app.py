@@ -120,6 +120,18 @@ LETTER_INSTRUCTION_RE = re.compile(
     r".{0,60}(сопроводительн\w*|писем\w*|письма\w*)",
     re.IGNORECASE)
 
+# Команда в чате «добавь в исключения...»/«отклоняй вакансии с...» — дописывает
+# строку в settings.search.exclusions (см. ui_app._run_chat_turn), тоже без
+# обращения к модели. В отличие от LETTER_INSTRUCTION_RE — не заменяет
+# значение, а дописывает: exclusions уже сегодня многострочный список «по
+# причине на строку», команда добавляет ещё одну причину, а не переписывает
+# весь список.
+EXCLUSION_INSTRUCTION_RE = re.compile(
+    r"(настрой|поменяй|измени|запомни|учти|добавь|не\s+показывай|"
+    r"не\s+предлагай|исключи|отклоняй)"
+    r".{0,60}(вакансии|исключени\w*|отклонени\w*)",
+    re.IGNORECASE)
+
 
 class AgentBridge:
     """Методы этого класса вызываются из JavaScript как window.pywebview.api.*"""
@@ -139,12 +151,11 @@ class AgentBridge:
         # История чата — persisted в agent.db (chat_turns), переживает
         # перезапуск приложения. image_b64 в памяти хранит только тело
         # base64 без data:-префикса (см. send_chat_message), в БД лежит
-        # то же самое под именем image_ref.
-        self._chat_history: list[dict] = [
-            {"role": t["role"], "content": t["content"],
-             **({"image_b64": t["image_ref"]} if t["image_ref"] else {})}
-            for t in database.load_chat_turns()
-        ]
+        # то же самое под именем image_ref. Диалог теперь не один на всё
+        # приложение, а выбирается через switch_chat_conversation() —
+        # история грузится лениво, а не эйгерно на старте.
+        self._active_conversation_id: int | None = None
+        self._chat_history: list[dict] = []
         self._chat_busy = False
         self._chat_future = None
         self._provider_check_future = None
@@ -428,6 +439,10 @@ class AgentBridge:
             return {"ok": False, "error": "Пустое сообщение"}
         if self._chat_busy:
             return {"ok": False, "error": "Дождитесь ответа на предыдущее сообщение"}
+        if self._active_conversation_id is None:
+            # Новый пользователь / пустой чат — первое сообщение само заводит
+            # диалог в корне, без отдельного экрана «создайте диалог».
+            self._active_conversation_id = database.create_chat_conversation()
         image_b64 = None
         if image_data_url:
             m = re.match(r"^data:image/[^;]+;base64,(.+)$", image_data_url, re.DOTALL)
@@ -438,9 +453,10 @@ class AgentBridge:
         if image_b64:
             turn["image_b64"] = image_b64
         self._chat_history.append(turn)
-        database.add_chat_turn("user", turn["content"], image_b64)
+        database.add_chat_turn("user", turn["content"], image_b64,
+                                conversation_id=self._active_conversation_id)
         self._chat_future = self._submit(self._run_chat_turn())
-        return {"ok": True}
+        return {"ok": True, "conversation_id": self._active_conversation_id}
 
     def retry_last_chat_message(self):
         if self._chat_busy:
@@ -459,12 +475,17 @@ class AgentBridge:
         return {"ok": True}
 
     def reset_chat(self):
+        """Чистит только открытый диалог, а не всю историю чата (диалог
+        остаётся в списке, просто пустой) — см. AskUserQuestion в плане
+        фичи, это осознанная смена смысла кнопки после появления папок."""
+        if self._active_conversation_id is None:
+            return {"ok": True}
         self._chat_history = []
-        database.clear_chat_turns()
+        database.clear_chat_turns(self._active_conversation_id)
         return {"ok": True}
 
     def get_chat_history(self):
-        """Для отрисовки переписки при старте — до этого чат считался
+        """Переписка активного диалога — до появления диалогов чат считался
         эфемерным и рендерился только по событиям (см. app.js: chat_reply)."""
         def to_data_url(image_b64):
             return f"data:image/png;base64,{image_b64}" if image_b64 else None
@@ -472,6 +493,66 @@ class AgentBridge:
             {"role": t["role"], "text": t["content"], "image": to_data_url(t.get("image_b64"))}
             for t in self._chat_history
         ]
+
+    # ---------- папки и диалоги чата ----------
+
+    def list_chat_folders(self):
+        return database.list_chat_folders()
+
+    def create_chat_folder(self, name: str):
+        name = (name or "").strip()
+        if not name:
+            return {"ok": False, "error": "Пустое имя папки"}
+        return {"ok": True, "id": database.create_chat_folder(name)}
+
+    def rename_chat_folder(self, folder_id: int, name: str):
+        name = (name or "").strip()
+        if not name:
+            return {"ok": False, "error": "Пустое имя папки"}
+        database.rename_chat_folder(folder_id, name)
+        return {"ok": True}
+
+    def delete_chat_folder(self, folder_id: int):
+        # Каскадно: папка и все диалоги внутри — пользователь явно выбрал
+        # этот вариант вместо переноса диалогов в корень.
+        if self._active_conversation_id is not None:
+            active = next((c for c in database.list_chat_conversations()
+                           if c["id"] == self._active_conversation_id), None)
+            if active and active["folder_id"] == folder_id:
+                self._active_conversation_id = None
+                self._chat_history = []
+        database.delete_chat_folder(folder_id)
+        return {"ok": True}
+
+    def list_chat_conversations(self):
+        return database.list_chat_conversations()
+
+    def create_chat_conversation(self, folder_id: int | None = None, title: str = "Новый диалог"):
+        conversation_id = database.create_chat_conversation(folder_id, title)
+        return {"ok": True, "id": conversation_id}
+
+    def rename_chat_conversation(self, conversation_id: int, title: str):
+        title = (title or "").strip()
+        if not title:
+            return {"ok": False, "error": "Пустое имя диалога"}
+        database.rename_chat_conversation(conversation_id, title)
+        return {"ok": True}
+
+    def delete_chat_conversation(self, conversation_id: int):
+        if self._active_conversation_id == conversation_id:
+            self._active_conversation_id = None
+            self._chat_history = []
+        database.delete_chat_conversation(conversation_id)
+        return {"ok": True}
+
+    def switch_chat_conversation(self, conversation_id: int):
+        self._active_conversation_id = conversation_id
+        self._chat_history = [
+            {"role": t["role"], "content": t["content"],
+             **({"image_b64": t["image_ref"]} if t["image_ref"] else {})}
+            for t in database.load_chat_turns(conversation_id)
+        ]
+        return self.get_chat_history()
 
     async def _run_chat_turn(self):
         """Отправляет накопленную историю модели и рассылает результат
@@ -508,7 +589,22 @@ class AgentBridge:
                 reply = (f"Учла для следующих сопроводительных писем: «{last_user}». "
                          f"Можно посмотреть и поправить на вкладке «Резюме и поиск».")
                 self._chat_history.append({"role": "assistant", "content": reply})
-                database.add_chat_turn("assistant", reply)
+                database.add_chat_turn("assistant", reply, conversation_id=self._active_conversation_id)
+                self._emit("chat_reply", {"text": reply})
+                return
+
+            if not image_b64 and EXCLUSION_INSTRUCTION_RE.search(last_user):
+                # Тоже детерминированно, но дописывает строку, а не заменяет
+                # весь список — exclusions уже сегодня «по причине на строку».
+                lines = [l for l in settings.data["search"]["exclusions"].splitlines() if l.strip()]
+                if last_user not in lines:
+                    lines.append(last_user)
+                settings.data["search"]["exclusions"] = "\n".join(lines)
+                settings.save()
+                reply = (f"Добавила в список причин отклонения: «{last_user}». "
+                         f"Можно посмотреть и поправить на вкладке «Фильтры».")
+                self._chat_history.append({"role": "assistant", "content": reply})
+                database.add_chat_turn("assistant", reply, conversation_id=self._active_conversation_id)
                 self._emit("chat_reply", {"text": reply})
                 return
 
@@ -558,7 +654,7 @@ class AgentBridge:
                 # Детерминированный результат отклика — к модели не ходим,
                 # тут нечего сочинять.
                 self._chat_history.append({"role": "assistant", "content": result.message})
-                database.add_chat_turn("assistant", result.message)
+                database.add_chat_turn("assistant", result.message, conversation_id=self._active_conversation_id)
                 self._emit("chat_reply", {"text": result.message})
                 return
 
@@ -589,7 +685,7 @@ class AgentBridge:
                 return
 
             self._chat_history.append({"role": "assistant", "content": reply})
-            database.add_chat_turn("assistant", reply)
+            database.add_chat_turn("assistant", reply, conversation_id=self._active_conversation_id)
             self._emit("chat_reply", {"text": reply})
         except asyncio.CancelledError:
             # stop_chat() отменяет future — событие через тот же chat_error,
@@ -1128,7 +1224,7 @@ def selftest():
         for mod in ("hh_client", "database", "ai_analyzer", "llm_providers",
                     "notify_sinks", "tg_bot", "control",
                     "resume_reader", "chat_analyzer", "quick_apply",
-                    "sites", "hh_session", "hh_api", "camoufox"):
+                    "sites", "hh_session", "hh_api", "camoufox", "chat_crypto"):
             try:
                 __import__(mod)
                 print(f"  ✅ {mod}")
